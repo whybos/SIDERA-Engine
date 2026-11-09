@@ -40,6 +40,7 @@ void Application::run() {
 
         m_window.pollEvents();
         m_renderer.getCamera().processInput(m_window, deltaTime);
+        m_renderer.updateScene(deltaTime);
         m_renderer.drawFrame(m_window);
 
         if (m_config.smokeTest) {
@@ -81,7 +82,7 @@ void Application::run() {
                     "[SmokeTest] Pitch limit clamp verified: maxPitch={:.1f} deg, minPitch={:.1f} deg",
                     maxClamped, minClamped
                 );
-                cam.setOrientation(-125.0f, -22.0f);
+                cam.setOrientation(-128.0f, -24.0f);
             } else if (!testedResizeStep1 && elapsed >= std::chrono::milliseconds(700)) {
                 testedResizeStep1 = true;
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window to 1024x576...");

@@ -1,5 +1,6 @@
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "core/Log.h"
+#include "renderer/Mesh.h"
 #include "renderer/Vertex.h"
 #include "renderer/vulkan/VulkanCheck.h"
 #include "renderer/vulkan/VulkanShader.h"
@@ -86,7 +87,7 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -110,6 +111,11 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(MeshPushConstants);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     if (descriptorSetLayout != VK_NULL_HANDLE) {
@@ -119,8 +125,8 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
         pipelineLayoutInfo.setLayoutCount = 0;
         pipelineLayoutInfo.pSetLayouts = nullptr;
     }
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     VK_CHECK(
         vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout),

@@ -1,22 +1,37 @@
 #pragma once
 
 #include "renderer/Camera.h"
+#include "renderer/Mesh.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
 #include "renderer/vulkan/VulkanSwapchain.h"
 
+#include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <vulkan/vulkan.h>
 
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace sidera {
 
 class Window;
 class VulkanContext;
+
+struct RenderObject {
+    const Mesh* mesh = nullptr;
+    glm::vec3 position{0.0f, 0.0f, 0.0f};
+    glm::vec3 scale{1.0f, 1.0f, 1.0f};
+    glm::vec3 rotationAxis{0.0f, 1.0f, 0.0f};
+    float rotationRadians = 0.0f;
+    float angularSpeed = 0.0f;
+
+    [[nodiscard]] glm::mat4 computeModelMatrix() const noexcept;
+};
 
 class Renderer {
 public:
@@ -30,6 +45,7 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
+    void updateScene(float deltaTime) noexcept;
     void drawFrame(Window& window);
 
     [[nodiscard]] Camera& getCamera() noexcept { return m_camera; }
@@ -46,8 +62,8 @@ private:
     void destroyCameraDescriptorResources() noexcept;
     void createCommandPoolsAndBuffers();
     void destroyCommandPools() noexcept;
-    void createGeometryBuffers();
-    void destroyGeometryBuffers() noexcept;
+    void createSceneMeshes();
+    void destroySceneMeshes() noexcept;
 
     void updateCameraUniformBuffer(uint32_t frameIndex);
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) const;
@@ -69,9 +85,11 @@ private:
     std::array<std::unique_ptr<VulkanBuffer>, kMaxFramesInFlight> m_cameraUniformBuffers;
 
     std::unique_ptr<GraphicsPipeline> m_pipeline;
-    std::unique_ptr<VulkanBuffer> m_vertexBuffer;
-    std::unique_ptr<VulkanBuffer> m_indexBuffer;
-    uint32_t m_indexCount = 0;
+
+    std::unique_ptr<Mesh> m_groundMesh;
+    std::unique_ptr<Mesh> m_cubeMesh;
+    std::unique_ptr<Mesh> m_pyramidMesh;
+    std::vector<RenderObject> m_renderObjects;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

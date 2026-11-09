@@ -6,9 +6,21 @@
 #include "renderer/vulkan/VulkanContext.h"
 #include "renderer/vulkan/VulkanDevice.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <array>
 
 namespace sidera {
+
+glm::mat4 RenderObject::computeModelMatrix() const noexcept {
+    glm::mat4 model{1.0f};
+    model = glm::translate(model, position);
+    if (rotationRadians != 0.0f) {
+        model = glm::rotate(model, rotationRadians, glm::normalize(rotationAxis));
+    }
+    model = glm::scale(model, scale);
+    return model;
+}
 
 namespace {
 constexpr const char* kVertShaderPath = "shaders/triangle.vert.spv";
@@ -62,6 +74,8 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
     );
 
     const VkExtent2D swapExtent = m_swapchain->getExtent();
+    m_camera.setPosition({2.40f, 1.85f, 3.10f});
+    m_camera.setOrientation(-128.0f, -24.0f);
     m_camera.setViewportSize(swapExtent.width, swapExtent.height);
 
     m_frameSync = std::make_unique<VulkanFrameSync>(
@@ -82,9 +96,9 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
         );
 
         createCommandPoolsAndBuffers();
-        createGeometryBuffers();
+        createSceneMeshes();
     } catch (...) {
-        destroyGeometryBuffers();
+        destroySceneMeshes();
         destroyCommandPools();
         m_pipeline.reset();
         destroyCameraDescriptorResources();
@@ -95,21 +109,20 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
     SIDERA_LOG_INFO(
         "Camera",
         "Initialized 3D Camera (pos=[{:.2f}, {:.2f}, {:.2f}], yaw={:.1f} deg, pitch={:.1f} deg, "
-        "FOV={:.1f} deg, aspect={:.3f}, near={:.2f}, far={:.1f}).",
+        "FOV={:.1f} deg, aspect={:.3f}).",
         camPos.x,
         camPos.y,
         camPos.z,
         m_camera.getYawDegrees(),
         m_camera.getPitchDegrees(),
         m_camera.getFovDegrees(),
-        m_camera.getAspectRatio(),
-        m_camera.getNearPlane(),
-        m_camera.getFarPlane()
+        m_camera.getAspectRatio()
     );
 
     SIDERA_LOG_INFO(
         "Renderer",
-        "Renderer initialized (ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
+        "Renderer initialized ({} 3D scene objects, ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
+        m_renderObjects.size(),
         m_clearColor.r,
         m_clearColor.g,
         m_clearColor.b,
@@ -124,11 +137,19 @@ Renderer::~Renderer() {
     m_context.waitIdle();
 
     destroyCommandPools();
-    destroyGeometryBuffers();
+    destroySceneMeshes();
     m_pipeline.reset();
     destroyCameraDescriptorResources();
     m_frameSync.reset();
     m_swapchain.reset();
+}
+
+void Renderer::updateScene(float deltaTime) noexcept {
+    for (auto& obj : m_renderObjects) {
+        if (obj.angularSpeed != 0.0f) {
+            obj.rotationRadians += obj.angularSpeed * deltaTime;
+        }
+    }
 }
 
 void Renderer::drawFrame(Window& window) {
@@ -193,7 +214,6 @@ void Renderer::drawFrame(Window& window) {
 void Renderer::createCameraDescriptorResources() {
     const VkDevice device = m_context.getDevice().getLogicalDevice();
 
-    // 1. Create descriptor set layout for CameraUBO (set = 0, binding = 0)
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -211,7 +231,6 @@ void Renderer::createCameraDescriptorResources() {
         "Failed to create camera descriptor set layout"
     );
 
-    // 2. Create descriptor pool for per-frame uniform buffers
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSize.descriptorCount = kMaxFramesInFlight;
@@ -227,7 +246,6 @@ void Renderer::createCameraDescriptorResources() {
         "Failed to create camera descriptor pool"
     );
 
-    // 3. Allocate descriptor sets for each frame in flight
     std::array<VkDescriptorSetLayout, kMaxFramesInFlight> layouts{};
     layouts.fill(m_cameraDescriptorSetLayout);
 
@@ -242,7 +260,6 @@ void Renderer::createCameraDescriptorResources() {
         "Failed to allocate camera descriptor sets"
     );
 
-    // 4. Create per-frame uniform buffers and bind them to descriptor sets
     const VkDeviceSize uboSize = sizeof(CameraUniformData);
     for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
         m_cameraUniformBuffers[i] = std::make_unique<VulkanBuffer>(
@@ -351,75 +368,59 @@ void Renderer::destroyCommandPools() noexcept {
     }
 }
 
-void Renderer::createGeometryBuffers() {
-    // 3D Test Scene: Ground reference quad + intersecting 3D upright triangles
-    const std::array<Vertex, 10> vertices = {{
-        // Ground platform quad at Y = -0.40
-        {.position = {-1.25f, -0.40f, -1.25f}, .color = {0.14f, 0.22f, 0.36f}}, // 0: Back-left
-        {.position = { 1.25f, -0.40f, -1.25f}, .color = {0.18f, 0.30f, 0.45f}}, // 1: Back-right
-        {.position = { 1.25f, -0.40f,  1.25f}, .color = {0.22f, 0.42f, 0.56f}}, // 2: Front-right
-        {.position = {-1.25f, -0.40f,  1.25f}, .color = {0.16f, 0.34f, 0.48f}}, // 3: Front-left
+void Renderer::createSceneMeshes() {
+    m_groundMesh = Mesh::createGroundGrid(m_context.getDevice(), m_commandPools[0], 2.4f, 6);
+    m_cubeMesh = Mesh::createCube(m_context.getDevice(), m_commandPools[0], 0.45f);
+    m_pyramidMesh = Mesh::createPyramid(m_context.getDevice(), m_commandPools[0], 0.45f, 0.95f);
 
-        // Primary 3D upright triangle along X-Y plane (Z = 0.0)
-        {.position = {-0.75f, -0.40f,  0.00f}, .color = {1.00f, 0.25f, 0.20f}}, // 4: Base left (Red)
-        {.position = { 0.75f, -0.40f,  0.00f}, .color = {0.20f, 0.95f, 0.45f}}, // 5: Base right (Green)
-        {.position = { 0.00f,  0.85f,  0.00f}, .color = {1.00f, 0.85f, 0.20f}}, // 6: Apex (Gold)
+    m_renderObjects.clear();
 
-        // Secondary 3D upright triangle along Z-Y plane (X = 0.0)
-        {.position = { 0.00f, -0.40f, -0.75f}, .color = {0.25f, 0.50f, 1.00f}}, // 7: Base back (Blue)
-        {.position = { 0.00f, -0.40f,  0.75f}, .color = {0.95f, 0.30f, 0.85f}}, // 8: Base front (Magenta)
-        {.position = { 0.00f,  0.85f,  0.00f}, .color = {0.20f, 0.95f, 0.95f}}  // 9: Apex (Cyan)
-    }};
+    // 1. Checkerboard 3D Ground Grid at Y = -0.50
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_groundMesh.get(),
+        .position = {0.0f, -0.50f, 0.0f},
+        .scale = {1.0f, 1.0f, 1.0f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = 0.0f,
+        .angularSpeed = 0.0f
+    });
 
-    const std::array<uint32_t, 12> indices = {
-        0, 1, 2,  2, 3, 0, // Ground quad (2 triangles)
-        4, 5, 6,           // X-Y upright triangle
-        7, 8, 9            // Z-Y upright triangle
-    };
-    m_indexCount = static_cast<uint32_t>(indices.size());
+    // 2. Back-left 3D Pyramid
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {-1.15f, -0.02f, -0.85f},
+        .scale = {1.0f, 1.0f, 1.0f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = 0.35f,
+        .angularSpeed = 0.45f
+    });
 
-    const VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertices.size();
-    const VkDeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();
+    // 3. Central Rotating 3D Cube
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_cubeMesh.get(),
+        .position = {0.0f, 0.05f, 0.0f},
+        .scale = {1.0f, 1.0f, 1.0f},
+        .rotationAxis = {0.15f, 1.0f, 0.10f},
+        .rotationRadians = -0.15f,
+        .angularSpeed = 0.35f
+    });
 
-    m_vertexBuffer = VulkanBuffer::createDeviceLocalBuffer(
-        m_context.getDevice(),
-        m_commandPools[0],
-        vertices.data(),
-        vertexBufferSize,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-    );
-    SIDERA_LOG_INFO(
-        "Buffer",
-        "Created DEVICE_LOCAL Vertex Buffer ({} vertices, {} bytes, stride={} bytes).",
-        vertices.size(),
-        vertexBufferSize,
-        sizeof(Vertex)
-    );
-
-    m_indexBuffer = VulkanBuffer::createDeviceLocalBuffer(
-        m_context.getDevice(),
-        m_commandPools[0],
-        indices.data(),
-        indexBufferSize,
-        VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-    );
-    SIDERA_LOG_INFO(
-        "Buffer",
-        "Created DEVICE_LOCAL Index Buffer ({} indices, {} bytes, type=VK_INDEX_TYPE_UINT32).",
-        indices.size(),
-        indexBufferSize
-    );
+    // 4. Front-right 3D Pyramid
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {1.10f, -0.02f, 0.70f},
+        .scale = {0.85f, 0.85f, 0.85f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = -0.50f,
+        .angularSpeed = -0.60f
+    });
 }
 
-void Renderer::destroyGeometryBuffers() noexcept {
-    if (m_indexBuffer) {
-        SIDERA_LOG_INFO("Buffer", "Destroying Vulkan Index Buffer...");
-        m_indexBuffer.reset();
-    }
-    if (m_vertexBuffer) {
-        SIDERA_LOG_INFO("Buffer", "Destroying Vulkan Vertex Buffer...");
-        m_vertexBuffer.reset();
-    }
+void Renderer::destroySceneMeshes() noexcept {
+    m_renderObjects.clear();
+    m_pyramidMesh.reset();
+    m_cubeMesh.reset();
+    m_groundMesh.reset();
 }
 
 void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) const {
@@ -497,14 +498,33 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
         nullptr
     );
 
-    // Bind GPU Vertex and Index Buffers and execute indexed draw
-    const VkBuffer vertexBuffers[] = {m_vertexBuffer->getHandle()};
-    const VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    // Draw all 3D mesh instances in the scene using per-object push constants
+    const Mesh* lastBoundMesh = nullptr;
+    for (const auto& obj : m_renderObjects) {
+        if (!obj.mesh) {
+            continue;
+        }
 
-    vkCmdBindIndexBuffer(cmd, m_indexBuffer->getHandle(), 0, VK_INDEX_TYPE_UINT32);
+        const MeshPushConstants pushData{
+            .model = obj.computeModelMatrix()
+        };
 
-    vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
+        vkCmdPushConstants(
+            cmd,
+            m_pipeline->getLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(MeshPushConstants),
+            &pushData
+        );
+
+        if (obj.mesh != lastBoundMesh) {
+            obj.mesh->bind(cmd);
+            lastBoundMesh = obj.mesh;
+        }
+
+        obj.mesh->draw(cmd);
+    }
 
     vkCmdEndRendering(cmd);
 
