@@ -1,0 +1,25 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# IDE & Editor directories
+.vs/
+.vscode/
+.idea/
+*.sln
+*.vcxproj*
+*.filters
+*.user
+
+# Compiled binaries and symbols
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.a
+*.so
+*.dylib

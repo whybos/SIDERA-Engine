@@ -1,0 +1,62 @@
+#pragma once
+
+#include <vulkan/vulkan.h>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace sidera {
+
+struct QueueFamilyIndices {
+    std::optional<uint32_t> graphicsFamily;
+    std::optional<uint32_t> presentFamily;
+
+    [[nodiscard]] bool isComplete() const noexcept {
+        return graphicsFamily.has_value() && presentFamily.has_value();
+    }
+};
+
+class VulkanDevice {
+public:
+    VulkanDevice(VkInstance instance, VkSurfaceKHR surface);
+    ~VulkanDevice();
+
+    VulkanDevice(const VulkanDevice&) = delete;
+    VulkanDevice& operator=(const VulkanDevice&) = delete;
+    VulkanDevice(VulkanDevice&&) = delete;
+    VulkanDevice& operator=(VulkanDevice&&) = delete;
+
+    void waitIdle() const;
+
+    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return m_physicalDevice; }
+    [[nodiscard]] VkDevice getLogicalDevice() const noexcept { return m_device; }
+    [[nodiscard]] VkQueue getGraphicsQueue() const noexcept { return m_graphicsQueue; }
+    [[nodiscard]] VkQueue getPresentQueue() const noexcept { return m_presentQueue; }
+    [[nodiscard]] const QueueFamilyIndices& getQueueFamilies() const noexcept { return m_queueFamilies; }
+    [[nodiscard]] const VkPhysicalDeviceProperties& getProperties() const noexcept { return m_properties; }
+    [[nodiscard]] bool isDynamicRenderingEnabled() const noexcept { return m_dynamicRenderingEnabled; }
+
+private:
+    void pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
+    void createLogicalDevice();
+
+    [[nodiscard]] int scorePhysicalDevice(VkPhysicalDevice device, VkSurfaceKHR surface) const;
+    [[nodiscard]] static QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface);
+    [[nodiscard]] static bool checkDeviceExtensionSupport(VkPhysicalDevice device);
+    [[nodiscard]] static bool checkVulkan13FeatureSupport(VkPhysicalDevice device);
+
+    VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    VkDevice m_device = VK_NULL_HANDLE;
+    VkQueue m_graphicsQueue = VK_NULL_HANDLE;
+    VkQueue m_presentQueue = VK_NULL_HANDLE;
+
+    QueueFamilyIndices m_queueFamilies{};
+    VkPhysicalDeviceProperties m_properties{};
+    bool m_dynamicRenderingEnabled = false;
+
+    static const std::vector<const char*> s_requiredDeviceExtensions;
+};
+
+} // namespace sidera
