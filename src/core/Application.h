@@ -17,7 +17,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.11.0 - 1080p High-Poly Scene",
+        .title = "SIDERA Engine v0.12.0 - Real-Time Shadow Mapping",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -25,6 +25,9 @@ struct ApplicationConfig {
     bool startWithStats = false;   // --stats: begin with the F3 overlay enabled
     float targetFps = 60.0f;       // frame limiter target (<= 0 disables); F4 toggles at runtime
     bool stressTest = false;       // --stress-test: high-poly stress scene (>= 1M triangles)
+    bool shadowsEnabled = true;    // --shadows on/off: directional shadow mapping
+    uint32_t shadowResolution = 2048; // --shadow-resolution 1024/2048/4096
+    bool showShadowMap = false;    // --show-shadow-map: shadow depth map debug visualization
     std::optional<glm::vec3> cameraPos;
     std::optional<float> cameraYaw;
     std::optional<float> cameraPitch;

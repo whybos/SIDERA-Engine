@@ -9,14 +9,19 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.11.0";
+constexpr std::string_view kEngineVersion = "v0.12.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
     : m_config(config)
     , m_window(m_config.window)
     , m_vulkanContext(m_window)
-    , m_renderer(m_vulkanContext, m_window, m_config.clearColor)
+    , m_renderer(m_vulkanContext,
+                 m_window,
+                 m_config.clearColor,
+                 m_config.shadowsEnabled,
+                 m_config.shadowResolution,
+                 m_config.showShadowMap ? 1u : 0u)
     , m_baseTitle(m_config.window.title) {
     m_statsEnabled = m_config.startWithStats;
     m_limiterEnabled = m_config.targetFps > 0.0f;
@@ -43,16 +48,32 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         default: break;
     }
 
+    const char* debugModeStr = "none";
+    switch (m_renderer.getShadowDebugMode()) {
+        case 1: debugModeStr = "PIP"; break;
+        case 2: debugModeStr = "depth"; break;
+        case 3: debugModeStr = "factor"; break;
+        default: break;
+    }
+
+    const std::string shadowInfo = m_renderer.isShadowsEnabled()
+        ? std::format("shadows ON ({}x{}){}",
+                      m_renderer.getShadowResolution(),
+                      m_renderer.getShadowResolution(),
+                      m_renderer.getShadowDebugMode() > 0 ? std::format(" [dbg:{}]", debugModeStr) : "")
+        : "shadows OFF";
+
     const std::string title = std::format(
         "SIDERA {} | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
-        "{}x{} {} | {} draws, {} tris | limiter {}{}",
+        "{}x{} {} | {} draws (+{} shadow), {} tris | {} | limiter {}{}",
         kEngineVersion,
         r.fps,
         m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
         r.avgMs, r.minMs, r.maxMs,
         r.onePercentLowFps,
         extent.width, extent.height, presentMode,
-        m_renderer.getDrawCallCount(), m_renderer.getTriangleCount(),
+        m_renderer.getDrawCallCount(), m_renderer.getShadowDrawCallCount(), m_renderer.getTriangleCount(),
+        shadowInfo,
         m_limiterEnabled ? "ON" : "OFF",
         m_renderer.isStressTestMode() ? " | STRESS MODE" : ""
     );
@@ -70,7 +91,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress-test mode, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -85,6 +106,8 @@ void Application::run() {
     bool f3WasDown = false;
     bool f4WasDown = false;
     bool f5WasDown = false;
+    bool f6WasDown = false;
+    bool f7WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -94,9 +117,12 @@ void Application::run() {
         m_window.pollEvents();
 
         // F3: toggle performance stats. F4: toggle frame limiter. F5: toggle high-poly stress-test mode.
+        // F6: toggle real-time shadows. F7: cycle shadow debug visualization modes.
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
+        const bool f6Down = m_window.isKeyPressed(GLFW_KEY_F6);
+        const bool f7Down = m_window.isKeyPressed(GLFW_KEY_F7);
 
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
@@ -119,9 +145,23 @@ void Application::run() {
                             m_renderer.isStressTestMode() ? "ON (>= 1,000,000 tris)" : "OFF (>= 250,000 tris)",
                             m_renderer.getTriangleCount());
         }
+        if (f6Down && !f6WasDown) {
+            m_renderer.toggleShadows();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Shadows toggled: {}.", m_renderer.isShadowsEnabled() ? "ENABLED" : "DISABLED");
+        }
+        if (f7Down && !f7WasDown) {
+            m_renderer.cycleShadowDebugMode();
+            const char* dbgNames[] = {"OFF", "PIP thumbnail (top-right)", "Fullscreen depth map", "Shadow factor mask"};
+            SIDERA_LOG_INFO("Core", "Shadow debug mode: {} ({}).",
+                            m_renderer.getShadowDebugMode(),
+                            dbgNames[m_renderer.getShadowDebugMode() % 4]);
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
+        f6WasDown = f6Down;
+        f7WasDown = f7Down;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

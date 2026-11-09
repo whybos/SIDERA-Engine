@@ -22,6 +22,15 @@ int main(int argc, char* argv[]) {
             config.window.width = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (arg == "--height" && i + 1 < argc) {
             config.window.height = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (arg == "--shadows" && i + 1 < argc) {
+            const std::string_view val(argv[++i]);
+            config.shadowsEnabled = (val == "on" || val == "true" || val == "1");
+        } else if (arg == "--no-shadows") {
+            config.shadowsEnabled = false;
+        } else if (arg == "--shadow-resolution" && i + 1 < argc) {
+            config.shadowResolution = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (arg == "--show-shadow-map") {
+            config.showShadowMap = true;
         } else if (arg == "--cam-pos" && i + 3 < argc) {
             config.cameraPos = glm::vec3(
                 std::strtof(argv[i + 1], nullptr),
@@ -37,7 +46,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.11.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.12.0...");
         {
             sidera::Application app(config);
             app.run();

@@ -4,11 +4,14 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     mat4 view;
     mat4 proj;
     mat4 viewProj;
+    mat4 lightSpaceMatrix;
     vec4 cameraPos;
     vec4 sunDirection;     // xyz = direction TOWARDS the sun
     vec4 sunColor;         // rgb = color, a = intensity
     vec4 pointPosIntensity[2];  // xyz = world position, w = intensity
     vec4 pointColor[2];         // rgb = color
+    vec4 shadowParams;          // x = enabled, y = bias, z = pcfKernel, w = debugMode
+    vec4 screenParams;          // x = width, y = height
 } scene;
 
 layout(push_constant) uniform PushConstants {

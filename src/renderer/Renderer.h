@@ -5,6 +5,7 @@
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
 #include "renderer/vulkan/VulkanDepthBuffer.h"
+#include "renderer/vulkan/VulkanShadowMap.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
 #include "renderer/vulkan/VulkanSwapchain.h"
 #include "renderer/vulkan/VulkanTexture.h"
@@ -25,6 +26,11 @@ namespace sidera {
 
 class Window;
 class VulkanContext;
+
+struct ShadowPushConstants {
+    glm::mat4 lightSpaceMatrix;
+    glm::mat4 model;
+};
 
 struct RenderObject {
     const Mesh* mesh = nullptr;
@@ -47,18 +53,26 @@ struct RenderObject {
 // Must match the SceneUBO block in triangle.vert / triangle.frag (std140)
 struct alignas(16) SceneUniformData {
     CameraUniformData camera;
+    glm::mat4 lightSpaceMatrix{1.0f};
     glm::vec4 cameraPos{0.0f};
     glm::vec4 sunDirection{0.0f, 1.0f, 0.0f, 0.0f};
     glm::vec4 sunColor{1.0f};
     std::array<glm::vec4, 2> pointPosIntensity{};
     std::array<glm::vec4, 2> pointColor{};
+    glm::vec4 shadowParams{1.0f, 0.0025f, 3.0f, 0.0f};
+    glm::vec4 screenParams{1920.0f, 1080.0f, 0.0f, 0.0f};
 };
 
 class Renderer {
 public:
     static constexpr uint32_t kMaxFramesInFlight = 2;
 
-    Renderer(const VulkanContext& context, const Window& window, const glm::vec4& clearColor);
+    Renderer(const VulkanContext& context,
+             const Window& window,
+             const glm::vec4& clearColor,
+             bool shadowsEnabled = true,
+             uint32_t shadowResolution = 2048,
+             uint32_t shadowDebugMode = 0);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -77,24 +91,44 @@ public:
     [[nodiscard]] uint64_t getRenderedFrameCount() const noexcept { return m_renderedFrames; }
     [[nodiscard]] const VulkanSwapchain& getSwapchain() const noexcept { return *m_swapchain; }
     [[nodiscard]] const VulkanDepthBuffer& getDepthBuffer() const noexcept { return *m_depthBuffer; }
+    [[nodiscard]] const VulkanShadowMap& getShadowMap() const noexcept { return *m_shadowMap; }
     [[nodiscard]] const GraphicsPipeline& getPipeline() const noexcept { return *m_pipeline; }
     [[nodiscard]] uint32_t getDrawCallCount() const noexcept { return static_cast<uint32_t>(m_renderObjects.size()); }
+    [[nodiscard]] uint32_t getShadowDrawCallCount() const noexcept { return m_shadowDrawCalls; }
     [[nodiscard]] uint32_t getTriangleCount() const noexcept;
 
     void setStressTestMode(bool enabled);
     void toggleStressTestMode();
     [[nodiscard]] bool isStressTestMode() const noexcept { return m_stressTestMode; }
 
+    void setShadowsEnabled(bool enabled) noexcept { m_shadowsEnabled = enabled; }
+    void toggleShadows() noexcept { m_shadowsEnabled = !m_shadowsEnabled; }
+    [[nodiscard]] bool isShadowsEnabled() const noexcept { return m_shadowsEnabled; }
+
+    void setShadowResolution(uint32_t resolution);
+    [[nodiscard]] uint32_t getShadowResolution() const noexcept { return m_shadowMap ? m_shadowMap->resolution() : 0; }
+
+    void setShadowDebugMode(uint32_t mode) noexcept { m_shadowDebugMode = mode; }
+    void cycleShadowDebugMode() noexcept;
+    [[nodiscard]] uint32_t getShadowDebugMode() const noexcept { return m_shadowDebugMode; }
+
+    [[nodiscard]] glm::mat4 computeLightSpaceMatrix() const noexcept;
+
 private:
     void createCameraDescriptorResources();
+    void updateShadowDescriptorSets();
     void destroyCameraDescriptorResources() noexcept;
     void createCommandPoolsAndBuffers();
     void destroyCommandPools() noexcept;
     void createSceneMeshes();
     void destroySceneMeshes() noexcept;
 
+    void createShadowPipeline();
+    void destroyShadowPipeline() noexcept;
+
     void updateCameraUniformBuffer(uint32_t frameIndex);
-    void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) const;
+    void recordShadowPass(VkCommandBuffer cmd);
+    void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
     void submitCommandBuffer(VkCommandBuffer cmd,
                              VkSemaphore waitSemaphore,
                              VkSemaphore signalSemaphore,
@@ -106,6 +140,7 @@ private:
 
     std::unique_ptr<VulkanSwapchain> m_swapchain;
     std::unique_ptr<VulkanDepthBuffer> m_depthBuffer;
+    std::unique_ptr<VulkanShadowMap> m_shadowMap;
     std::unique_ptr<VulkanFrameSync> m_frameSync;
     std::unique_ptr<VulkanTexture> m_albedoTexture;
     IBLMaps m_iblMaps;
@@ -117,7 +152,15 @@ private:
 
     std::unique_ptr<GraphicsPipeline> m_pipeline;
 
+    // Dedicated depth-only shadow pipeline
+    VkPipelineLayout m_shadowPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
+
     bool m_stressTestMode = false;
+    bool m_shadowsEnabled = true;
+    uint32_t m_shadowDebugMode = 0; // 0=off, 1=PIP thumbnail, 2=fullscreen depth, 3=shadow mask
+    float m_shadowDepthBias = 0.0025f;
+    uint32_t m_shadowDrawCalls = 0;
 
     std::unique_ptr<Mesh> m_groundMesh;
     std::unique_ptr<Mesh> m_cubeMesh;
