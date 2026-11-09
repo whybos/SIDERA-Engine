@@ -28,6 +28,7 @@ constexpr const char* kFragShaderPath = "shaders/triangle.frag.spv";
 
 void transitionImageLayout(VkCommandBuffer cmd,
                            VkImage image,
+                           VkImageAspectFlags aspectMask,
                            VkImageLayout oldLayout,
                            VkImageLayout newLayout,
                            VkPipelineStageFlags2 srcStageMask,
@@ -45,7 +46,7 @@ void transitionImageLayout(VkCommandBuffer cmd,
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.aspectMask = aspectMask;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
@@ -74,6 +75,13 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
     );
 
     const VkExtent2D swapExtent = m_swapchain->getExtent();
+
+    m_depthBuffer = std::make_unique<VulkanDepthBuffer>(
+        m_context.getDevice(),
+        swapExtent.width,
+        swapExtent.height
+    );
+
     m_camera.setPosition({2.40f, 1.85f, 3.10f});
     m_camera.setOrientation(-128.0f, -24.0f);
     m_camera.setViewportSize(swapExtent.width, swapExtent.height);
@@ -90,6 +98,7 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
         m_pipeline = std::make_unique<GraphicsPipeline>(
             m_context.getDevice().getLogicalDevice(),
             m_swapchain->getImageFormat(),
+            m_depthBuffer->format(),
             m_cameraDescriptorSetLayout,
             kVertShaderPath,
             kFragShaderPath
@@ -121,7 +130,7 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
 
     SIDERA_LOG_INFO(
         "Renderer",
-        "Renderer initialized ({} 3D scene objects, ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
+        "Renderer initialized ({} 3D scene objects, Hardware Depth Testing: ENABLED, ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
         m_renderObjects.size(),
         m_clearColor.r,
         m_clearColor.g,
@@ -141,6 +150,7 @@ Renderer::~Renderer() {
     m_pipeline.reset();
     destroyCameraDescriptorResources();
     m_frameSync.reset();
+    m_depthBuffer.reset();
     m_swapchain.reset();
 }
 
@@ -375,27 +385,20 @@ void Renderer::createSceneMeshes() {
 
     m_renderObjects.clear();
 
-    // 1. Checkerboard 3D Ground Grid at Y = -0.50
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_groundMesh.get(),
-        .position = {0.0f, -0.50f, 0.0f},
-        .scale = {1.0f, 1.0f, 1.0f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.0f,
-        .angularSpeed = 0.0f
-    });
+    // Intentionally ordered front-to-back and intersecting so that ONLY hardware depth testing
+    // (VK_COMPARE_OP_LESS) produces correct occlusion instead of draw-order (painter's) order:
 
-    // 2. Back-left 3D Pyramid
+    // 1. Front-right 3D Pyramid (drawn FIRST, closest to camera)
     m_renderObjects.push_back(RenderObject{
         .mesh = m_pyramidMesh.get(),
-        .position = {-1.15f, -0.02f, -0.85f},
-        .scale = {1.0f, 1.0f, 1.0f},
+        .position = {0.95f, -0.02f, 0.65f},
+        .scale = {0.85f, 0.85f, 0.85f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.35f,
-        .angularSpeed = 0.45f
+        .rotationRadians = -0.50f,
+        .angularSpeed = -0.50f
     });
 
-    // 3. Central Rotating 3D Cube
+    // 2. Central Rotating 3D Cube
     m_renderObjects.push_back(RenderObject{
         .mesh = m_cubeMesh.get(),
         .position = {0.0f, 0.05f, 0.0f},
@@ -405,14 +408,34 @@ void Renderer::createSceneMeshes() {
         .angularSpeed = 0.35f
     });
 
-    // 4. Front-right 3D Pyramid
+    // 3. Intersecting Spire Pyramid piercing directly through the center 3D Cube
     m_renderObjects.push_back(RenderObject{
         .mesh = m_pyramidMesh.get(),
-        .position = {1.10f, -0.02f, 0.70f},
-        .scale = {0.85f, 0.85f, 0.85f},
+        .position = {0.0f, 0.30f, 0.0f},
+        .scale = {0.62f, 1.55f, 0.62f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = -0.50f,
-        .angularSpeed = -0.60f
+        .rotationRadians = 0.60f,
+        .angularSpeed = -0.40f
+    });
+
+    // 4. Back-left 3D Pyramid
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {-1.15f, -0.02f, -0.85f},
+        .scale = {1.0f, 1.0f, 1.0f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = 0.35f,
+        .angularSpeed = 0.45f
+    });
+
+    // 5. Checkerboard 3D Ground Grid at Y = -0.50 (drawn LAST — would overwrite everything without depth buffer!)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_groundMesh.get(),
+        .position = {0.0f, -0.50f, 0.0f},
+        .scale = {1.0f, 1.0f, 1.0f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = 0.0f,
+        .angularSpeed = 0.0f
     });
 }
 
@@ -433,10 +456,11 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
     const VkImage swapchainImage = m_swapchain->getImage(imageIndex);
     const VkExtent2D extent = m_swapchain->getExtent();
 
-    // Transition swapchain image: UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
+    // Transition swapchain color image: UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
     transitionImageLayout(
         cmd,
         swapchainImage,
+        VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -445,7 +469,20 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
     );
 
-    // Begin Vulkan 1.3 Dynamic Rendering
+    // Transition depth image: UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    transitionImageLayout(
+        cmd,
+        m_depthBuffer->image(),
+        VK_IMAGE_ASPECT_DEPTH_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+    );
+
+    // Begin Vulkan 1.3 Dynamic Rendering with both color and depth attachments
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachment.imageView = m_swapchain->getImageView(imageIndex);
@@ -459,6 +496,14 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
         m_clearColor.a
     }};
 
+    VkRenderingAttachmentInfo depthAttachment{};
+    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachment.imageView = m_depthBuffer->imageView();
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.clearValue.depthStencil = {1.0f, 0};
+
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea.offset = {0, 0};
@@ -466,6 +511,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.pDepthAttachment = &depthAttachment;
 
     vkCmdBeginRendering(cmd, &renderingInfo);
 
@@ -532,6 +578,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
     transitionImageLayout(
         cmd,
         swapchainImage,
+        VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -592,9 +639,11 @@ void Renderer::recreateSwapchain(Window& window) {
     }
 
     m_swapchain->recreate(fbSize.x, fbSize.y);
+    const VkExtent2D newExtent = m_swapchain->getExtent();
+
+    m_depthBuffer->recreate(newExtent.width, newExtent.height);
     m_frameSync->resizeRenderFinishedSemaphores(m_swapchain->getImageCount());
 
-    const VkExtent2D newExtent = m_swapchain->getExtent();
     m_camera.setViewportSize(newExtent.width, newExtent.height);
     SIDERA_LOG_INFO(
         "Camera",
@@ -604,10 +653,12 @@ void Renderer::recreateSwapchain(Window& window) {
         newExtent.height
     );
 
-    if (m_pipeline->getColorFormat() != m_swapchain->getImageFormat()) {
+    if (m_pipeline->getColorFormat() != m_swapchain->getImageFormat() ||
+        m_pipeline->getDepthFormat() != m_depthBuffer->format()) {
         m_pipeline = std::make_unique<GraphicsPipeline>(
             m_context.getDevice().getLogicalDevice(),
             m_swapchain->getImageFormat(),
+            m_depthBuffer->format(),
             m_cameraDescriptorSetLayout,
             kVertShaderPath,
             kFragShaderPath

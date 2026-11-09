@@ -10,6 +10,7 @@ class GraphicsPipeline {
 public:
     GraphicsPipeline(VkDevice device,
                      VkFormat colorAttachmentFormat,
+                     VkFormat depthAttachmentFormat,
                      VkDescriptorSetLayout descriptorSetLayout,
                      const std::filesystem::path& vertSpvPath,
                      const std::filesystem::path& fragSpvPath);
@@ -23,6 +24,7 @@ public:
     [[nodiscard]] VkPipeline getHandle() const noexcept { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout getLayout() const noexcept { return m_pipelineLayout; }
     [[nodiscard]] VkFormat getColorFormat() const noexcept { return m_colorFormat; }
+    [[nodiscard]] VkFormat getDepthFormat() const noexcept { return m_depthFormat; }
 
 private:
     void createPipeline(VkDescriptorSetLayout descriptorSetLayout,
@@ -32,6 +34,7 @@ private:
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkFormat m_colorFormat = VK_FORMAT_UNDEFINED;
+    VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 };

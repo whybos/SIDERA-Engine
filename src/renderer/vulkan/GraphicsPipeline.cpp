@@ -11,11 +11,13 @@ namespace sidera {
 
 GraphicsPipeline::GraphicsPipeline(VkDevice device,
                                    VkFormat colorAttachmentFormat,
+                                   VkFormat depthAttachmentFormat,
                                    VkDescriptorSetLayout descriptorSetLayout,
                                    const std::filesystem::path& vertSpvPath,
                                    const std::filesystem::path& fragSpvPath)
     : m_device(device)
-    , m_colorFormat(colorAttachmentFormat) {
+    , m_colorFormat(colorAttachmentFormat)
+    , m_depthFormat(depthAttachmentFormat) {
     try {
         createPipeline(descriptorSetLayout, vertSpvPath, fragSpvPath);
     } catch (...) {
@@ -96,6 +98,16 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.minDepthBounds = 0.0f;
+    depthStencil.maxDepthBounds = 1.0f;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT |
@@ -138,7 +150,7 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     pipelineRenderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     pipelineRenderingInfo.colorAttachmentCount = 1;
     pipelineRenderingInfo.pColorAttachmentFormats = &m_colorFormat;
-    pipelineRenderingInfo.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    pipelineRenderingInfo.depthAttachmentFormat = m_depthFormat;
     pipelineRenderingInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -151,7 +163,7 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = nullptr;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = m_pipelineLayout;
@@ -172,7 +184,7 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
         "Failed to create Vulkan graphics pipeline"
     );
 
-    SIDERA_LOG_INFO("Pipeline", "Graphics pipeline created successfully (Vulkan 1.3 Dynamic Rendering).");
+    SIDERA_LOG_INFO("Pipeline", "Graphics pipeline created successfully (Vulkan 1.3 Dynamic Rendering + Depth Testing).");
 }
 
 void GraphicsPipeline::destroyPipeline() noexcept {

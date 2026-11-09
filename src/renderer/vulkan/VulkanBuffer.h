@@ -45,14 +45,14 @@ public:
     [[nodiscard]] VkBufferUsageFlags getUsage() const noexcept { return m_usage; }
     [[nodiscard]] VkMemoryPropertyFlags getMemoryPropertyFlags() const noexcept { return m_memoryPropertyFlags; }
 
-private:
-    void release() noexcept;
-
     [[nodiscard]] static uint32_t findMemoryType(VkPhysicalDevice physicalDevice,
                                                  uint32_t typeFilter,
                                                  VkMemoryPropertyFlags requiredProperties,
-                                                 VkMemoryPropertyFlags preferredProperties,
-                                                 VkMemoryPropertyFlags* outSelectedFlags);
+                                                 VkMemoryPropertyFlags preferredProperties = 0,
+                                                 VkMemoryPropertyFlags* outSelectedFlags = nullptr);
+
+private:
+    void release() noexcept;
 
     const VulkanDevice* m_device = nullptr;
     VkBuffer m_buffer = VK_NULL_HANDLE;

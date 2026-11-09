@@ -4,6 +4,7 @@
 #include "renderer/Mesh.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
+#include "renderer/vulkan/VulkanDepthBuffer.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
 #include "renderer/vulkan/VulkanSwapchain.h"
 
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] const glm::vec4& getClearColor() const noexcept { return m_clearColor; }
     [[nodiscard]] uint64_t getRenderedFrameCount() const noexcept { return m_renderedFrames; }
     [[nodiscard]] const VulkanSwapchain& getSwapchain() const noexcept { return *m_swapchain; }
+    [[nodiscard]] const VulkanDepthBuffer& getDepthBuffer() const noexcept { return *m_depthBuffer; }
     [[nodiscard]] const GraphicsPipeline& getPipeline() const noexcept { return *m_pipeline; }
 
 private:
@@ -77,6 +79,7 @@ private:
     Camera m_camera;
 
     std::unique_ptr<VulkanSwapchain> m_swapchain;
+    std::unique_ptr<VulkanDepthBuffer> m_depthBuffer;
     std::unique_ptr<VulkanFrameSync> m_frameSync;
 
     VkDescriptorSetLayout m_cameraDescriptorSetLayout = VK_NULL_HANDLE;
