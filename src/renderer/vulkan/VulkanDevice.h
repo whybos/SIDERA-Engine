@@ -37,6 +37,7 @@ public:
     [[nodiscard]] const QueueFamilyIndices& getQueueFamilies() const noexcept { return m_queueFamilies; }
     [[nodiscard]] const VkPhysicalDeviceProperties& getProperties() const noexcept { return m_properties; }
     [[nodiscard]] bool isDynamicRenderingEnabled() const noexcept { return m_dynamicRenderingEnabled; }
+    [[nodiscard]] bool isSamplerAnisotropyEnabled() const noexcept { return m_samplerAnisotropyEnabled; }
 
 private:
     void pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
@@ -55,6 +56,7 @@ private:
     QueueFamilyIndices m_queueFamilies{};
     VkPhysicalDeviceProperties m_properties{};
     bool m_dynamicRenderingEnabled = false;
+    bool m_samplerAnisotropyEnabled = false;
 
     static const std::vector<const char*> s_requiredDeviceExtensions;
 };

@@ -12,7 +12,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1280,
         .height = 720,
-        .title = "SIDERA Engine v0.7.0 - Depth Buffer",
+        .title = "SIDERA Engine v0.8.0 - Texture System",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};

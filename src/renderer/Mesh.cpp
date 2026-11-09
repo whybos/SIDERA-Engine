@@ -71,40 +71,40 @@ std::unique_ptr<Mesh> Mesh::createCube(const VulkanDevice& device,
                                        float h) {
     const std::vector<Vertex> vertices = {
         // Front face (+Z) - Coral Red
-        {{-h, -h,  h}, {0.95f, 0.32f, 0.28f}},
-        {{ h, -h,  h}, {0.98f, 0.45f, 0.32f}},
-        {{ h,  h,  h}, {1.00f, 0.58f, 0.38f}},
-        {{-h,  h,  h}, {0.95f, 0.40f, 0.35f}},
+        {{-h, -h,  h}, {0.95f, 0.32f, 0.28f}, {0.0f, 1.0f}},
+        {{ h, -h,  h}, {0.98f, 0.45f, 0.32f}, {1.0f, 1.0f}},
+        {{ h,  h,  h}, {1.00f, 0.58f, 0.38f}, {1.0f, 0.0f}},
+        {{-h,  h,  h}, {0.95f, 0.40f, 0.35f}, {0.0f, 0.0f}},
 
         // Back face (-Z) - Deep Azure
-        {{ h, -h, -h}, {0.20f, 0.48f, 0.92f}},
-        {{-h, -h, -h}, {0.18f, 0.40f, 0.85f}},
-        {{-h,  h, -h}, {0.28f, 0.62f, 0.98f}},
-        {{ h,  h, -h}, {0.32f, 0.68f, 1.00f}},
+        {{ h, -h, -h}, {0.20f, 0.48f, 0.92f}, {0.0f, 1.0f}},
+        {{-h, -h, -h}, {0.18f, 0.40f, 0.85f}, {1.0f, 1.0f}},
+        {{-h,  h, -h}, {0.28f, 0.62f, 0.98f}, {1.0f, 0.0f}},
+        {{ h,  h, -h}, {0.32f, 0.68f, 1.00f}, {0.0f, 0.0f}},
 
         // Right face (+X) - Emerald Teal
-        {{ h, -h,  h}, {0.16f, 0.80f, 0.56f}},
-        {{ h, -h, -h}, {0.14f, 0.72f, 0.50f}},
-        {{ h,  h, -h}, {0.26f, 0.92f, 0.68f}},
-        {{ h,  h,  h}, {0.30f, 0.96f, 0.72f}},
+        {{ h, -h,  h}, {0.16f, 0.80f, 0.56f}, {0.0f, 1.0f}},
+        {{ h, -h, -h}, {0.14f, 0.72f, 0.50f}, {1.0f, 1.0f}},
+        {{ h,  h, -h}, {0.26f, 0.92f, 0.68f}, {1.0f, 0.0f}},
+        {{ h,  h,  h}, {0.30f, 0.96f, 0.72f}, {0.0f, 0.0f}},
 
         // Left face (-X) - Royal Violet
-        {{-h, -h, -h}, {0.62f, 0.32f, 0.92f}},
-        {{-h, -h,  h}, {0.68f, 0.38f, 0.96f}},
-        {{-h,  h,  h}, {0.78f, 0.52f, 1.00f}},
-        {{-h,  h, -h}, {0.72f, 0.45f, 0.98f}},
+        {{-h, -h, -h}, {0.62f, 0.32f, 0.92f}, {0.0f, 1.0f}},
+        {{-h, -h,  h}, {0.68f, 0.38f, 0.96f}, {1.0f, 1.0f}},
+        {{-h,  h,  h}, {0.78f, 0.52f, 1.00f}, {1.0f, 0.0f}},
+        {{-h,  h, -h}, {0.72f, 0.45f, 0.98f}, {0.0f, 0.0f}},
 
         // Top face (+Y) - Golden Amber
-        {{-h,  h,  h}, {0.98f, 0.80f, 0.24f}},
-        {{ h,  h,  h}, {1.00f, 0.86f, 0.32f}},
-        {{ h,  h, -h}, {0.96f, 0.76f, 0.22f}},
-        {{-h,  h, -h}, {0.92f, 0.72f, 0.20f}},
+        {{-h,  h,  h}, {0.98f, 0.80f, 0.24f}, {0.0f, 1.0f}},
+        {{ h,  h,  h}, {1.00f, 0.86f, 0.32f}, {1.0f, 1.0f}},
+        {{ h,  h, -h}, {0.96f, 0.76f, 0.22f}, {1.0f, 0.0f}},
+        {{-h,  h, -h}, {0.92f, 0.72f, 0.20f}, {0.0f, 0.0f}},
 
         // Bottom face (-Y) - Dark Slate
-        {{-h, -h, -h}, {0.22f, 0.26f, 0.34f}},
-        {{ h, -h, -h}, {0.25f, 0.30f, 0.38f}},
-        {{ h, -h,  h}, {0.28f, 0.34f, 0.42f}},
-        {{-h, -h,  h}, {0.24f, 0.28f, 0.36f}}
+        {{-h, -h, -h}, {0.22f, 0.26f, 0.34f}, {0.0f, 1.0f}},
+        {{ h, -h, -h}, {0.25f, 0.30f, 0.38f}, {1.0f, 1.0f}},
+        {{ h, -h,  h}, {0.28f, 0.34f, 0.42f}, {1.0f, 0.0f}},
+        {{-h, -h,  h}, {0.24f, 0.28f, 0.36f}, {0.0f, 0.0f}}
     };
 
     std::vector<uint32_t> indices;
@@ -131,30 +131,30 @@ std::unique_ptr<Mesh> Mesh::createPyramid(const VulkanDevice& device,
 
     const std::vector<Vertex> vertices = {
         // Front face (+Z)
-        {{-halfBase, yMin,  halfBase}, {0.20f, 0.75f, 0.95f}},
-        {{ halfBase, yMin,  halfBase}, {0.25f, 0.85f, 0.98f}},
-        {{ 0.0f,     yMax,  0.0f    }, {0.95f, 0.98f, 1.00f}},
+        {{-halfBase, yMin,  halfBase}, {0.20f, 0.75f, 0.95f}, {0.0f, 1.0f}},
+        {{ halfBase, yMin,  halfBase}, {0.25f, 0.85f, 0.98f}, {1.0f, 1.0f}},
+        {{ 0.0f,     yMax,  0.0f    }, {0.95f, 0.98f, 1.00f}, {0.5f, 0.0f}},
 
         // Right face (+X)
-        {{ halfBase, yMin,  halfBase}, {0.15f, 0.55f, 0.88f}},
-        {{ halfBase, yMin, -halfBase}, {0.12f, 0.48f, 0.82f}},
-        {{ 0.0f,     yMax,  0.0f    }, {0.85f, 0.92f, 1.00f}},
+        {{ halfBase, yMin,  halfBase}, {0.15f, 0.55f, 0.88f}, {0.0f, 1.0f}},
+        {{ halfBase, yMin, -halfBase}, {0.12f, 0.48f, 0.82f}, {1.0f, 1.0f}},
+        {{ 0.0f,     yMax,  0.0f    }, {0.85f, 0.92f, 1.00f}, {0.5f, 0.0f}},
 
         // Back face (-Z)
-        {{ halfBase, yMin, -halfBase}, {0.35f, 0.30f, 0.85f}},
-        {{-halfBase, yMin, -halfBase}, {0.42f, 0.35f, 0.90f}},
-        {{ 0.0f,     yMax,  0.0f    }, {0.88f, 0.85f, 1.00f}},
+        {{ halfBase, yMin, -halfBase}, {0.35f, 0.30f, 0.85f}, {0.0f, 1.0f}},
+        {{-halfBase, yMin, -halfBase}, {0.42f, 0.35f, 0.90f}, {1.0f, 1.0f}},
+        {{ 0.0f,     yMax,  0.0f    }, {0.88f, 0.85f, 1.00f}, {0.5f, 0.0f}},
 
         // Left face (-X)
-        {{-halfBase, yMin, -halfBase}, {0.55f, 0.35f, 0.92f}},
-        {{-halfBase, yMin,  halfBase}, {0.62f, 0.42f, 0.96f}},
-        {{ 0.0f,     yMax,  0.0f    }, {0.92f, 0.88f, 1.00f}},
+        {{-halfBase, yMin, -halfBase}, {0.55f, 0.35f, 0.92f}, {0.0f, 1.0f}},
+        {{-halfBase, yMin,  halfBase}, {0.62f, 0.42f, 0.96f}, {1.0f, 1.0f}},
+        {{ 0.0f,     yMax,  0.0f    }, {0.92f, 0.88f, 1.00f}, {0.5f, 0.0f}},
 
         // Bottom base (-Y)
-        {{-halfBase, yMin, -halfBase}, {0.18f, 0.24f, 0.35f}},
-        {{ halfBase, yMin, -halfBase}, {0.20f, 0.26f, 0.38f}},
-        {{ halfBase, yMin,  halfBase}, {0.22f, 0.28f, 0.40f}},
-        {{-halfBase, yMin,  halfBase}, {0.20f, 0.25f, 0.36f}}
+        {{-halfBase, yMin, -halfBase}, {0.18f, 0.24f, 0.35f}, {0.0f, 1.0f}},
+        {{ halfBase, yMin, -halfBase}, {0.20f, 0.26f, 0.38f}, {1.0f, 1.0f}},
+        {{ halfBase, yMin,  halfBase}, {0.22f, 0.28f, 0.40f}, {1.0f, 0.0f}},
+        {{-halfBase, yMin,  halfBase}, {0.20f, 0.25f, 0.36f}, {0.0f, 0.0f}}
     };
 
     const std::vector<uint32_t> indices = {
@@ -194,10 +194,10 @@ std::unique_ptr<Mesh> Mesh::createGroundGrid(const VulkanDevice& device,
 
             const uint32_t base = static_cast<uint32_t>(vertices.size());
             // Counter-clockwise when viewed from +Y (above)
-            vertices.push_back({{x0, 0.0f, z1}, c0});
-            vertices.push_back({{x1, 0.0f, z1}, c1});
-            vertices.push_back({{x1, 0.0f, z0}, c0});
-            vertices.push_back({{x0, 0.0f, z0}, c1});
+            vertices.push_back({{x0, 0.0f, z1}, c0, {0.0f, 1.0f}});
+            vertices.push_back({{x1, 0.0f, z1}, c1, {1.0f, 1.0f}});
+            vertices.push_back({{x1, 0.0f, z0}, c0, {1.0f, 0.0f}});
+            vertices.push_back({{x0, 0.0f, z0}, c1, {0.0f, 0.0f}});
 
             indices.push_back(base + 0);
             indices.push_back(base + 1);

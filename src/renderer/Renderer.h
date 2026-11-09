@@ -7,6 +7,7 @@
 #include "renderer/vulkan/VulkanDepthBuffer.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
 #include "renderer/vulkan/VulkanSwapchain.h"
+#include "renderer/vulkan/VulkanTexture.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -81,6 +82,7 @@ private:
     std::unique_ptr<VulkanSwapchain> m_swapchain;
     std::unique_ptr<VulkanDepthBuffer> m_depthBuffer;
     std::unique_ptr<VulkanFrameSync> m_frameSync;
+    std::unique_ptr<VulkanTexture> m_albedoTexture;
 
     VkDescriptorSetLayout m_cameraDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;

@@ -181,6 +181,10 @@ void VulkanDevice::createLogicalDevice() {
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
+    VkPhysicalDeviceFeatures supportedFeatures{};
+    vkGetPhysicalDeviceFeatures(m_physicalDevice, &supportedFeatures);
+    m_samplerAnisotropyEnabled = (supportedFeatures.samplerAnisotropy == VK_TRUE);
+
     // Enable Vulkan 1.3 Dynamic Rendering and Synchronization2
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -190,6 +194,7 @@ void VulkanDevice::createLogicalDevice() {
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     deviceFeatures2.pNext = &features13;
+    deviceFeatures2.features.samplerAnisotropy = m_samplerAnisotropyEnabled ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -211,7 +216,8 @@ void VulkanDevice::createLogicalDevice() {
 
     SIDERA_LOG_INFO(
         "Vulkan",
-        "Logical device created (Vulkan 1.3 Dynamic Rendering: ENABLED, Synchronization2: ENABLED)."
+        "Logical device created (Vulkan 1.3 Dynamic Rendering: ENABLED, Synchronization2: ENABLED, SamplerAnisotropy: {}).",
+        m_samplerAnisotropyEnabled ? "ENABLED" : "DISABLED"
     );
 }
 
