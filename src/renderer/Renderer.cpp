@@ -132,7 +132,7 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
 
     SIDERA_LOG_INFO(
         "Renderer",
-        "Renderer initialized ({} 3D scene objects, Hardware Depth Testing: ENABLED, ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
+        "Renderer initialized ({} 3D scene objects, Hardware Depth Testing: ENABLED, PBR (Cook-Torrance): ENABLED, ClearColor: [{:.2f}, {:.2f}, {:.2f}, {:.2f}], FramesInFlight: {}).",
         m_renderObjects.size(),
         m_clearColor.r,
         m_clearColor.g,
@@ -231,7 +231,7 @@ void Renderer::createCameraDescriptorResources() {
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     uboLayoutBinding.pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
@@ -282,7 +282,7 @@ void Renderer::createCameraDescriptorResources() {
         "Failed to allocate camera descriptor sets"
     );
 
-    const VkDeviceSize uboSize = sizeof(CameraUniformData);
+    const VkDeviceSize uboSize = sizeof(SceneUniformData);
     for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
         m_cameraUniformBuffers[i] = std::make_unique<VulkanBuffer>(
             m_context.getDevice(),
@@ -354,8 +354,29 @@ void Renderer::destroyCameraDescriptorResources() noexcept {
 }
 
 void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
-    const CameraUniformData ubo = m_camera.getUniformData();
-    m_cameraUniformBuffers[frameIndex]->uploadData(&ubo, sizeof(CameraUniformData), 0);
+    SceneUniformData ubo{};
+    ubo.camera = m_camera.getUniformData();
+    ubo.cameraPos = glm::vec4(m_camera.getPosition(), 1.0f);
+
+    // Warm key light (directional sun) + one warm and one cool point light
+    ubo.sunDirection = glm::vec4(glm::normalize(glm::vec3(-0.45f, 0.80f, 0.40f)), 0.0f);
+    ubo.sunColor = glm::vec4(1.0f, 0.95f, 0.85f, 2.6f);
+    ubo.pointPosIntensity[0] = glm::vec4(-1.6f, 1.1f, 1.2f, 5.5f);
+    ubo.pointColor[0] = glm::vec4(1.0f, 0.65f, 0.35f, 0.0f);
+    ubo.pointPosIntensity[1] = glm::vec4(1.9f, 1.0f, -0.6f, 5.5f);
+    ubo.pointColor[1] = glm::vec4(0.35f, 0.60f, 1.0f, 0.0f);
+
+    m_cameraUniformBuffers[frameIndex]->uploadData(&ubo, sizeof(SceneUniformData), 0);
+}
+
+uint32_t Renderer::getTriangleCount() const noexcept {
+    uint32_t triangles = 0;
+    for (const auto& obj : m_renderObjects) {
+        if (obj.mesh) {
+            triangles += obj.mesh->getIndexCount() / 3;
+        }
+    }
+    return triangles;
 }
 
 void Renderer::createCommandPoolsAndBuffers() {
@@ -402,68 +423,77 @@ void Renderer::destroyCommandPools() noexcept {
 }
 
 void Renderer::createSceneMeshes() {
-    m_groundMesh = Mesh::createGroundGrid(m_context.getDevice(), m_commandPools[0], 2.4f, 6);
-    m_cubeMesh = Mesh::createCube(m_context.getDevice(), m_commandPools[0], 0.45f);
-    m_pyramidMesh = Mesh::createPyramid(m_context.getDevice(), m_commandPools[0], 0.45f, 0.95f);
+    const VulkanDevice& dev = m_context.getDevice();
+    m_groundMesh = Mesh::createGroundGrid(dev, m_commandPools[0], 2.4f, 6);
+    m_cubeMesh = Mesh::createCube(dev, m_commandPools[0], 0.45f);
+    m_pyramidMesh = Mesh::createPyramid(dev, m_commandPools[0], 0.45f, 0.95f);
+    m_sphereMesh = Mesh::createSphere(dev, m_commandPools[0], 0.28f, 32, 48);
 
     m_renderObjects.clear();
 
-    // Intentionally ordered front-to-back and intersecting so that ONLY hardware depth testing
-    // (VK_COMPARE_OP_LESS) produces correct occlusion instead of draw-order (painter's) order:
-
-    // 1. Front-right 3D Pyramid (drawn FIRST, closest to camera)
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_pyramidMesh.get(),
-        .position = {0.95f, -0.02f, 0.65f},
-        .scale = {0.85f, 0.85f, 0.85f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = -0.50f,
-        .angularSpeed = -0.50f
-    });
-
-    // 2. Central Rotating 3D Cube
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_cubeMesh.get(),
-        .position = {0.0f, 0.05f, 0.0f},
-        .scale = {1.0f, 1.0f, 1.0f},
-        .rotationAxis = {0.15f, 1.0f, 0.10f},
-        .rotationRadians = -0.15f,
-        .angularSpeed = 0.35f
-    });
-
-    // 3. Intersecting Spire Pyramid piercing directly through the center 3D Cube
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_pyramidMesh.get(),
-        .position = {0.0f, 0.30f, 0.0f},
-        .scale = {0.62f, 1.55f, 0.62f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.60f,
-        .angularSpeed = -0.40f
-    });
-
-    // 4. Back-left 3D Pyramid
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_pyramidMesh.get(),
-        .position = {-1.15f, -0.02f, -0.85f},
-        .scale = {1.0f, 1.0f, 1.0f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.35f,
-        .angularSpeed = 0.45f
-    });
-
-    // 5. Checkerboard 3D Ground Grid at Y = -0.50 (drawn LAST — would overwrite everything without depth buffer!)
+    // Ground (dielectric, rough, textured)
     m_renderObjects.push_back(RenderObject{
         .mesh = m_groundMesh.get(),
         .position = {0.0f, -0.50f, 0.0f},
-        .scale = {1.0f, 1.0f, 1.0f},
+        .albedo = {1.0f, 1.0f, 1.0f},
+        .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f
+    });
+
+    // Sphere showcase: roughness 0.10 -> 0.90 along X.
+    //  Front row (z = +0.55): dielectric (metallic 0), red plastic
+    //  Back row  (z = -0.35): metal (metallic 1), gold
+    constexpr int kColumns = 5;
+    for (int row = 0; row < 2; ++row) {
+        const bool metal = (row == 1);
+        for (int col = 0; col < kColumns; ++col) {
+            const float t = static_cast<float>(col) / static_cast<float>(kColumns - 1);
+            m_renderObjects.push_back(RenderObject{
+                .mesh = m_sphereMesh.get(),
+                .position = {-1.4f + 0.70f * static_cast<float>(col), -0.50f + 0.28f, metal ? -0.35f : 0.55f},
+                .albedo = metal ? glm::vec3{1.00f, 0.77f, 0.34f} : glm::vec3{0.80f, 0.10f, 0.08f},
+                .metallic = metal ? 1.0f : 0.0f,
+                .roughness = 0.10f + 0.80f * t,
+                .ao = 1.0f,
+                .textureStrength = 0.0f
+            });
+        }
+    }
+
+    // Slowly rotating textured cube (dielectric, mid roughness)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_cubeMesh.get(),
+        .position = {0.0f, -0.05f, -1.55f},
+        .rotationAxis = {0.15f, 1.0f, 0.10f},
+        .rotationRadians = 0.4f,
+        .angularSpeed = 0.35f,
+        .albedo = {0.95f, 0.95f, 0.95f},
+        .metallic = 0.0f, .roughness = 0.45f, .ao = 1.0f, .textureStrength = 1.0f
+    });
+
+    // Polished teal metal pyramid (left) and rough dielectric pyramid (right)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {-1.55f, -0.025f, -1.45f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.0f,
-        .angularSpeed = 0.0f
+        .rotationRadians = 0.35f,
+        .angularSpeed = 0.45f,
+        .albedo = {0.30f, 0.85f, 0.80f},
+        .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {1.55f, -0.025f, -1.45f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = -0.50f,
+        .angularSpeed = -0.50f,
+        .albedo = {0.35f, 0.45f, 0.95f},
+        .metallic = 0.0f, .roughness = 0.65f, .ao = 1.0f, .textureStrength = 0.0f
     });
 }
 
 void Renderer::destroySceneMeshes() noexcept {
     m_renderObjects.clear();
+    m_sphereMesh.reset();
     m_pyramidMesh.reset();
     m_cubeMesh.reset();
     m_groundMesh.reset();
@@ -575,13 +605,15 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) con
         }
 
         const MeshPushConstants pushData{
-            .model = obj.computeModelMatrix()
+            .model = obj.computeModelMatrix(),
+            .albedoMetallic = glm::vec4(obj.albedo, obj.metallic),
+            .roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f)
         };
 
         vkCmdPushConstants(
             cmd,
             m_pipeline->getLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0,
             sizeof(MeshPushConstants),
             &pushData

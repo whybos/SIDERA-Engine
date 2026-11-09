@@ -11,11 +11,13 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--smoke-test") {
             config.smokeTest = true;
+        } else if (std::string_view(argv[i]) == "--stats") {
+            config.startWithStats = true;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.8.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.9.0...");
         {
             sidera::Application app(config);
             app.run();

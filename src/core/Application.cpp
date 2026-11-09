@@ -2,6 +2,9 @@
 #include "core/Log.h"
 
 #include <chrono>
+#include <format>
+#include <string>
+#include <thread>
 
 namespace sidera {
 
@@ -9,8 +12,40 @@ Application::Application(const ApplicationConfig& config)
     : m_config(config)
     , m_window(m_config.window)
     , m_vulkanContext(m_window)
-    , m_renderer(m_vulkanContext, m_window, m_config.clearColor) {
+    , m_renderer(m_vulkanContext, m_window, m_config.clearColor)
+    , m_baseTitle(m_config.window.title) {
+    m_statsEnabled = m_config.startWithStats;
+    m_limiterEnabled = m_config.targetFps > 0.0f;
     SIDERA_LOG_INFO("Core", "SIDERA Engine initialized.");
+}
+
+void Application::updateStatsTitle(const FrameStatsReport& r) {
+    const auto extent = m_renderer.getSwapchain().getExtent();
+    const char* presentMode = "?";
+    switch (m_renderer.getSwapchain().getPresentMode()) {
+        case VK_PRESENT_MODE_FIFO_KHR:         presentMode = "FIFO(vsync)"; break;
+        case VK_PRESENT_MODE_FIFO_RELAXED_KHR: presentMode = "FIFO_RELAXED"; break;
+        case VK_PRESENT_MODE_MAILBOX_KHR:      presentMode = "MAILBOX"; break;
+        case VK_PRESENT_MODE_IMMEDIATE_KHR:    presentMode = "IMMEDIATE"; break;
+        default: break;
+    }
+
+    const std::string title = std::format(
+        "SIDERA v0.9.0 | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
+        "{}x{} {} | {} draws, {} tris | limiter {}",
+        r.fps,
+        m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
+        r.avgMs, r.minMs, r.maxMs,
+        r.onePercentLowFps,
+        extent.width, extent.height, presentMode,
+        m_renderer.getDrawCallCount(), m_renderer.getTriangleCount(),
+        m_limiterEnabled ? "ON" : "OFF"
+    );
+    m_window.setTitle(title);
+
+    if (m_config.smokeTest) {
+        SIDERA_LOG_INFO("Stats", "{}", title);
+    }
 }
 
 Application::~Application() {
@@ -20,7 +55,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ to move, Hold Right-Click to look, ESC to exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 frame limiter, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -32,6 +67,8 @@ void Application::run() {
     bool testedMinimize = false;
     bool testedRestore = false;
     bool testedResizeStep2 = false;
+    bool f3WasDown = false;
+    bool f4WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -39,9 +76,52 @@ void Application::run() {
         lastFrameTime = currentTime;
 
         m_window.pollEvents();
+
+        // F3: toggle performance stats (shown in the window title). F4: toggle the frame limiter.
+        const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
+        const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
+        if (f3Down && !f3WasDown) {
+            m_statsEnabled = !m_statsEnabled;
+            m_frameStats.reset();
+            if (!m_statsEnabled) {
+                m_window.setTitle(m_baseTitle);
+            }
+            SIDERA_LOG_INFO("Core", "Performance stats {}.", m_statsEnabled ? "ENABLED" : "DISABLED");
+        }
+        if (f4Down && !f4WasDown && m_config.targetFps > 0.0f) {
+            m_limiterEnabled = !m_limiterEnabled;
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Frame limiter {} (target {:.0f} FPS).",
+                            m_limiterEnabled ? "ON" : "OFF", m_config.targetFps);
+        }
+        f3WasDown = f3Down;
+        f4WasDown = f4Down;
+
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);
         m_renderer.drawFrame(m_window);
+
+        if (m_statsEnabled && !m_window.isMinimized()) {
+            FrameStatsReport report;
+            if (m_frameStats.record(deltaTime, report)) {
+                updateStatsTitle(report);
+            }
+        }
+
+        // Frame limiter: sleep most of the remaining budget, then yield-spin the last ~1.5 ms
+        // (Windows sleep granularity is too coarse for a precise 60 FPS cap).
+        if (m_limiterEnabled && m_config.targetFps > 0.0f && !m_window.isMinimized()) {
+            const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / static_cast<double>(m_config.targetFps)));
+            const auto frameEnd = currentTime + budget;
+            const auto sleepUntil = frameEnd - std::chrono::microseconds(1500);
+            if (std::chrono::steady_clock::now() < sleepUntil) {
+                std::this_thread::sleep_until(sleepUntil);
+            }
+            while (std::chrono::steady_clock::now() < frameEnd) {
+                std::this_thread::yield();
+            }
+        }
 
         if (m_config.smokeTest) {
             const auto elapsed = currentTime - startTime;

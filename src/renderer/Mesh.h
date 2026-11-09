@@ -16,9 +16,13 @@ namespace sidera {
 
 class VulkanDevice;
 
+// Per-object data (96 bytes, visible to vertex + fragment stages)
 struct alignas(16) MeshPushConstants {
     glm::mat4 model{1.0f};
+    glm::vec4 albedoMetallic{1.0f, 1.0f, 1.0f, 0.0f};  // rgb = albedo tint, a = metallic
+    glm::vec4 roughnessAoTex{0.5f, 1.0f, 0.0f, 0.0f};  // x = roughness, y = ambient occlusion, z = texture strength
 };
+static_assert(sizeof(MeshPushConstants) == 96, "MeshPushConstants must be 96 bytes.");
 
 class Mesh {
 public:
@@ -59,6 +63,14 @@ public:
         VkCommandPool transferCommandPool,
         float halfExtent = 2.5f,
         uint32_t subdivisions = 6
+    );
+
+    [[nodiscard]] static std::unique_ptr<Mesh> createSphere(
+        const VulkanDevice& device,
+        VkCommandPool transferCommandPool,
+        float radius = 0.5f,
+        uint32_t stacks = 32,
+        uint32_t slices = 48
     );
 
 private:

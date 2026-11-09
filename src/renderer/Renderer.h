@@ -32,7 +32,24 @@ struct RenderObject {
     float rotationRadians = 0.0f;
     float angularSpeed = 0.0f;
 
+    // PBR material
+    glm::vec3 albedo{1.0f, 1.0f, 1.0f};
+    float metallic = 0.0f;
+    float roughness = 0.5f;
+    float ao = 1.0f;
+    float textureStrength = 0.0f;
+
     [[nodiscard]] glm::mat4 computeModelMatrix() const noexcept;
+};
+
+// Must match the SceneUBO block in triangle.vert / triangle.frag (std140)
+struct alignas(16) SceneUniformData {
+    CameraUniformData camera;
+    glm::vec4 cameraPos{0.0f};
+    glm::vec4 sunDirection{0.0f, 1.0f, 0.0f, 0.0f};
+    glm::vec4 sunColor{1.0f};
+    std::array<glm::vec4, 2> pointPosIntensity{};
+    std::array<glm::vec4, 2> pointColor{};
 };
 
 class Renderer {
@@ -59,6 +76,8 @@ public:
     [[nodiscard]] const VulkanSwapchain& getSwapchain() const noexcept { return *m_swapchain; }
     [[nodiscard]] const VulkanDepthBuffer& getDepthBuffer() const noexcept { return *m_depthBuffer; }
     [[nodiscard]] const GraphicsPipeline& getPipeline() const noexcept { return *m_pipeline; }
+    [[nodiscard]] uint32_t getDrawCallCount() const noexcept { return static_cast<uint32_t>(m_renderObjects.size()); }
+    [[nodiscard]] uint32_t getTriangleCount() const noexcept;
 
 private:
     void createCameraDescriptorResources();
@@ -94,6 +113,7 @@ private:
     std::unique_ptr<Mesh> m_groundMesh;
     std::unique_ptr<Mesh> m_cubeMesh;
     std::unique_ptr<Mesh> m_pyramidMesh;
+    std::unique_ptr<Mesh> m_sphereMesh;
     std::vector<RenderObject> m_renderObjects;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

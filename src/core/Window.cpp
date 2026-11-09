@@ -100,6 +100,12 @@ bool Window::isMinimized() const noexcept {
     return fbSize.x == 0 || fbSize.y == 0;
 }
 
+void Window::setTitle(const std::string& title) noexcept {
+    if (m_window) {
+        glfwSetWindowTitle(m_window, title.c_str());
+    }
+}
+
 bool Window::isKeyPressed(int key) const noexcept {
     return glfwGetKey(m_window, key) == GLFW_PRESS;
 }
@@ -160,3 +166,4 @@ void Window::keyCallback(GLFWwindow* window, int key, int /*scancode*/, int acti
 }
 
 } // namespace sidera
+

@@ -33,6 +33,7 @@ public:
 
     [[nodiscard]] glm::uvec2 getFramebufferSize() const noexcept;
     void setSize(uint32_t width, uint32_t height) noexcept;
+    void setTitle(const std::string& title) noexcept;
     void minimize() noexcept;
     void restore() noexcept;
     [[nodiscard]] bool isMinimized() const noexcept;
