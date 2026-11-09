@@ -53,13 +53,17 @@ struct RenderObject {
 // Must match the SceneUBO block in triangle.vert / triangle.frag (std140)
 struct alignas(16) SceneUniformData {
     CameraUniformData camera;
-    glm::mat4 lightSpaceMatrix{1.0f};
+    std::array<glm::mat4, 4> cascadeLightSpaceMatrices{
+        glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f)
+    };
     glm::vec4 cameraPos{0.0f};
     glm::vec4 sunDirection{0.0f, 1.0f, 0.0f, 0.0f};
     glm::vec4 sunColor{1.0f};
     std::array<glm::vec4, 2> pointPosIntensity{};
     std::array<glm::vec4, 2> pointColor{};
-    glm::vec4 shadowParams{1.0f, 0.0025f, 3.0f, 0.0f};
+    glm::vec4 cascadeSplits{0.0f};
+    glm::vec4 shadowParams{1.0f, 0.0018f, 3.0f, 0.0f};
+    glm::vec4 cascadeParams{4.0f, 0.15f, 0.75f, 50.0f};
     glm::vec4 screenParams{1920.0f, 1080.0f, 0.0f, 0.0f};
 };
 
@@ -72,6 +76,7 @@ public:
              const glm::vec4& clearColor,
              bool shadowsEnabled = true,
              uint32_t shadowResolution = 2048,
+             uint32_t cascadeCount = 4,
              uint32_t shadowDebugMode = 0);
     ~Renderer();
 
@@ -108,11 +113,19 @@ public:
     void setShadowResolution(uint32_t resolution);
     [[nodiscard]] uint32_t getShadowResolution() const noexcept { return m_shadowMap ? m_shadowMap->resolution() : 0; }
 
+    void setCascadeCount(uint32_t count);
+    [[nodiscard]] uint32_t getCascadeCount() const noexcept { return m_cascadeCount; }
+
+    void setCascadeLambda(float lambda) noexcept { m_cascadeLambda = lambda; }
+    [[nodiscard]] float getCascadeLambda() const noexcept { return m_cascadeLambda; }
+
     void setShadowDebugMode(uint32_t mode) noexcept { m_shadowDebugMode = mode; }
     void cycleShadowDebugMode() noexcept;
     [[nodiscard]] uint32_t getShadowDebugMode() const noexcept { return m_shadowDebugMode; }
 
-    [[nodiscard]] glm::mat4 computeLightSpaceMatrix() const noexcept;
+    void updateCascades() noexcept;
+    [[nodiscard]] const std::array<glm::mat4, 4>& getCascadeMatrices() const noexcept { return m_cascadeMatrices; }
+    [[nodiscard]] const std::array<float, 4>& getCascadeSplits() const noexcept { return m_cascadeSplits; }
 
 private:
     void createCameraDescriptorResources();
@@ -158,9 +171,18 @@ private:
 
     bool m_stressTestMode = false;
     bool m_shadowsEnabled = true;
-    uint32_t m_shadowDebugMode = 0; // 0=off, 1=PIP thumbnail, 2=fullscreen depth, 3=shadow mask
-    float m_shadowDepthBias = 0.0025f;
+    uint32_t m_shadowDebugMode = 0; // 0=off, 1=cascade colors, 2=PIP thumbnail, 3=fullscreen depth, 4=shadow mask
+    float m_shadowDepthBias = 0.0018f;
     uint32_t m_shadowDrawCalls = 0;
+
+    uint32_t m_cascadeCount = 4;
+    float m_cascadeLambda = 0.75f;
+    float m_cascadeBlendFraction = 0.15f;
+    float m_shadowDistance = 50.0f;
+    std::array<float, 4> m_cascadeSplits{1.8f, 6.0f, 18.0f, 50.0f};
+    std::array<glm::mat4, 4> m_cascadeMatrices{
+        glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f)
+    };
 
     std::unique_ptr<Mesh> m_groundMesh;
     std::unique_ptr<Mesh> m_cubeMesh;

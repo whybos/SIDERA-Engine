@@ -29,6 +29,12 @@ int main(int argc, char* argv[]) {
             config.shadowsEnabled = false;
         } else if (arg == "--shadow-resolution" && i + 1 < argc) {
             config.shadowResolution = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if ((arg == "--cascade-count" || arg == "--cascades") && i + 1 < argc) {
+            config.cascadeCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (arg == "--cascade-lambda" && i + 1 < argc) {
+            config.cascadeLambda = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--show-cascades") {
+            config.showCascades = true;
         } else if (arg == "--show-shadow-map") {
             config.showShadowMap = true;
         } else if (arg == "--cam-pos" && i + 3 < argc) {
@@ -46,7 +52,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.12.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.13.0...");
         {
             sidera::Application app(config);
             app.run();

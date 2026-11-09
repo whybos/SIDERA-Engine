@@ -69,10 +69,12 @@ Renderer::Renderer(const VulkanContext& context,
                    const glm::vec4& clearColor,
                    bool shadowsEnabled,
                    uint32_t shadowResolution,
+                   uint32_t cascadeCount,
                    uint32_t shadowDebugMode)
     : m_context(context)
     , m_clearColor(clearColor)
     , m_shadowsEnabled(shadowsEnabled)
+    , m_cascadeCount(std::clamp(cascadeCount, 1u, 4u))
     , m_shadowDebugMode(shadowDebugMode) {
     const auto fbSize = window.getFramebufferSize();
 
@@ -94,7 +96,8 @@ Renderer::Renderer(const VulkanContext& context,
 
     m_shadowMap = std::make_unique<VulkanShadowMap>(
         m_context.getDevice(),
-        shadowResolution
+        shadowResolution,
+        m_cascadeCount
     );
 
     m_camera.setPosition({0.0f, 2.30f, 4.60f});
@@ -152,9 +155,9 @@ Renderer::Renderer(const VulkanContext& context,
 
     SIDERA_LOG_INFO(
         "Renderer",
-        "Renderer initialized ({} 3D scene objects, Depth: ENABLED, PBR: ENABLED, Directional Shadows: {} ({}x{} px), FramesInFlight: {}).",
+        "Renderer initialized ({} 3D scene objects, Depth: ENABLED, PBR: ENABLED, CSM: {} cascades ({}x{} px), FramesInFlight: {}).",
         m_renderObjects.size(),
-        m_shadowsEnabled ? "ENABLED" : "DISABLED",
+        m_cascadeCount,
         m_shadowMap->resolution(),
         m_shadowMap->resolution(),
         kMaxFramesInFlight
@@ -475,21 +478,93 @@ void Renderer::destroyCameraDescriptorResources() noexcept {
     }
 }
 
-glm::mat4 Renderer::computeLightSpaceMatrix() const noexcept {
-    const glm::vec3 sunDir = glm::normalize(glm::vec3(-0.45f, 0.80f, 0.40f));
-    const glm::vec3 sceneCenter(0.0f, 0.5f, -0.5f);
-    constexpr float kLightDistance = 20.0f;
-    const glm::vec3 lightPos = sceneCenter + sunDir * kLightDistance;
-    const glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+void Renderer::updateCascades() noexcept {
+    const float nearZ = m_camera.getNearPlane();
+    const float farZ = std::min(m_camera.getFarPlane(), m_shadowDistance);
+    const float range = farZ - nearZ;
+    const float ratio = farZ / std::max(nearZ, 0.001f);
+    const float lambda = m_cascadeLambda;
 
-    constexpr float kOrthoHalfSize = 8.5f;
-    glm::mat4 lightProj = glm::ortho(
-        -kOrthoHalfSize, kOrthoHalfSize,
-        -kOrthoHalfSize, kOrthoHalfSize,
-        1.0f, 40.0f
-    );
-    lightProj[1][1] *= -1.0f; // Invert Y for Vulkan clip space
-    return lightProj * lightView;
+    // Calculate practical split boundaries combining uniform and logarithmic
+    for (uint32_t i = 0; i < m_cascadeCount; ++i) {
+        const float p = static_cast<float>(i + 1) / static_cast<float>(m_cascadeCount);
+        const float logDepth = nearZ * std::pow(ratio, p);
+        const float uniformDepth = nearZ + range * p;
+        m_cascadeSplits[i] = lambda * logDepth + (1.0f - lambda) * uniformDepth;
+    }
+    for (uint32_t i = m_cascadeCount; i < 4; ++i) {
+        m_cascadeSplits[i] = farZ;
+    }
+
+    const glm::vec3 sunDir = glm::normalize(glm::vec3(-0.45f, 0.80f, 0.40f));
+    const float tanHalfFov = std::tan(glm::radians(m_camera.getFovDegrees()) * 0.5f);
+    const float aspect = m_camera.getAspectRatio();
+    const glm::mat4 camInvView = glm::inverse(m_camera.getViewMatrix());
+
+    for (uint32_t i = 0; i < m_cascadeCount; ++i) {
+        const float dNear = (i == 0) ? nearZ : m_cascadeSplits[i - 1];
+        const float dFar = m_cascadeSplits[i];
+
+        const float nearH = dNear * tanHalfFov;
+        const float nearW = nearH * aspect;
+        const float farH = dFar * tanHalfFov;
+        const float farW = farH * aspect;
+
+        // 8 corners of sub-frustum in camera view space
+        const std::array<glm::vec3, 8> cornersView = {
+            glm::vec3(-nearW,  nearH, -dNear),
+            glm::vec3( nearW,  nearH, -dNear),
+            glm::vec3(-nearW, -nearH, -dNear),
+            glm::vec3( nearW, -nearH, -dNear),
+            glm::vec3(-farW,   farH, -dFar),
+            glm::vec3( farW,   farH, -dFar),
+            glm::vec3(-farW,  -farH, -dFar),
+            glm::vec3( farW,  -farH, -dFar)
+        };
+
+        // Transform corners to world space
+        glm::vec3 frustumCenter(0.0f);
+        std::array<glm::vec3, 8> cornersWorld{};
+        for (size_t c = 0; c < 8; ++c) {
+            cornersWorld[c] = glm::vec3(camInvView * glm::vec4(cornersView[c], 1.0f));
+            frustumCenter += cornersWorld[c];
+        }
+        frustumCenter /= 8.0f;
+
+        // Bounding sphere radius to prevent rotation shimmering
+        float sphereRadius = 0.0f;
+        for (size_t c = 0; c < 8; ++c) {
+            sphereRadius = std::max(sphereRadius, glm::length(cornersWorld[c] - frustumCenter));
+        }
+        sphereRadius = std::ceil(sphereRadius * 16.0f) / 16.0f;
+
+        // Virtual light position pointing along sunDir towards frustum center
+        const glm::vec3 lightPos = frustumCenter + sunDir * (sphereRadius * 2.5f);
+        const glm::mat4 lightView = glm::lookAt(lightPos, frustumCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+
+        // Texel snapping stabilization:
+        // Transform center to light view space and snap to texel increments
+        const glm::vec3 centerLight = glm::vec3(lightView * glm::vec4(frustumCenter, 1.0f));
+        const float shadowRes = static_cast<float>(m_shadowMap ? m_shadowMap->resolution() : 2048);
+        const float worldUnitsPerTexel = (2.0f * sphereRadius) / shadowRes;
+
+        const float snappedX = std::floor(centerLight.x / worldUnitsPerTexel) * worldUnitsPerTexel;
+        const float snappedY = std::floor(centerLight.y / worldUnitsPerTexel) * worldUnitsPerTexel;
+        const glm::vec3 offset(snappedX - centerLight.x, snappedY - centerLight.y, 0.0f);
+
+        // Orthographic projection matrix for cascade
+        glm::mat4 lightProj = glm::ortho(
+            -sphereRadius + offset.x, sphereRadius + offset.x,
+            -sphereRadius + offset.y, sphereRadius + offset.y,
+            1.0f, sphereRadius * 5.0f
+        );
+        lightProj[1][1] *= -1.0f; // Invert Y for Vulkan clip space
+
+        m_cascadeMatrices[i] = lightProj * lightView;
+    }
+    for (uint32_t i = m_cascadeCount; i < 4; ++i) {
+        m_cascadeMatrices[i] = m_cascadeMatrices[m_cascadeCount - 1];
+    }
 }
 
 void Renderer::setShadowResolution(uint32_t resolution) {
@@ -497,13 +572,26 @@ void Renderer::setShadowResolution(uint32_t resolution) {
         return;
     }
     m_context.waitIdle();
-    m_shadowMap->recreate(resolution);
+    m_shadowMap->recreate(resolution, m_cascadeCount);
     updateShadowDescriptorSets();
-    SIDERA_LOG_INFO("Renderer", "Shadow map resolution updated to {}x{} px.", resolution, resolution);
+    SIDERA_LOG_INFO("Renderer", "Shadow map resolution updated to {}x{} px ({} cascades).",
+                    resolution, resolution, m_cascadeCount);
+}
+
+void Renderer::setCascadeCount(uint32_t count) {
+    count = std::clamp(count, 1u, 4u);
+    if (m_cascadeCount == count) {
+        return;
+    }
+    m_context.waitIdle();
+    m_cascadeCount = count;
+    m_shadowMap->recreate(m_shadowMap->resolution(), m_cascadeCount);
+    updateShadowDescriptorSets();
+    SIDERA_LOG_INFO("Renderer", "Shadow cascade count updated to {}.", m_cascadeCount);
 }
 
 void Renderer::cycleShadowDebugMode() noexcept {
-    m_shadowDebugMode = (m_shadowDebugMode + 1) % 4;
+    m_shadowDebugMode = (m_shadowDebugMode + 1) % 5;
 }
 
 void Renderer::createShadowPipeline() {
@@ -646,9 +734,11 @@ void Renderer::destroyShadowPipeline() noexcept {
 }
 
 void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
+    updateCascades();
+
     SceneUniformData ubo{};
     ubo.camera = m_camera.getUniformData();
-    ubo.lightSpaceMatrix = computeLightSpaceMatrix();
+    ubo.cascadeLightSpaceMatrices = m_cascadeMatrices;
     ubo.cameraPos = glm::vec4(m_camera.getPosition(), 1.0f);
 
     // Warm key light (directional sun) + one warm and one cool point light
@@ -659,11 +749,25 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
     ubo.pointPosIntensity[1] = glm::vec4(1.9f, 1.0f, -0.6f, 5.5f);
     ubo.pointColor[1] = glm::vec4(0.35f, 0.60f, 1.0f, 0.0f);
 
+    ubo.cascadeSplits = glm::vec4(
+        m_cascadeSplits[0],
+        m_cascadeSplits[1],
+        m_cascadeSplits[2],
+        m_cascadeSplits[3]
+    );
+
     ubo.shadowParams = glm::vec4(
         m_shadowsEnabled ? 1.0f : 0.0f,
         m_shadowDepthBias,
         3.0f,
         static_cast<float>(m_shadowDebugMode)
+    );
+
+    ubo.cascadeParams = glm::vec4(
+        static_cast<float>(m_cascadeCount),
+        m_cascadeBlendFraction,
+        m_cascadeLambda,
+        m_shadowDistance
     );
 
     const auto extent = m_swapchain->getExtent();
@@ -1016,84 +1120,88 @@ void Renderer::destroySceneMeshes() noexcept {
 
 void Renderer::recordShadowPass(VkCommandBuffer cmd) {
     m_shadowDrawCalls = 0;
-    if (!m_shadowsEnabled || !m_shadowMap || m_shadowPipeline == VK_NULL_HANDLE) {
+    if (!m_shadowsEnabled || !m_shadowMap || m_shadowPipeline == VK_NULL_HANDLE || m_cascadeCount == 0) {
         return;
     }
 
     m_shadowMap->transitionToAttachment(cmd);
 
-    VkRenderingAttachmentInfo depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = m_shadowMap->imageView();
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.clearValue.depthStencil = {1.0f, 0};
-
     const VkExtent2D shadowExtent = m_shadowMap->extent();
 
-    VkRenderingInfo renderingInfo{};
-    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    renderingInfo.renderArea.offset = {0, 0};
-    renderingInfo.renderArea.extent = shadowExtent;
-    renderingInfo.layerCount = 1;
-    renderingInfo.colorAttachmentCount = 0;
-    renderingInfo.pColorAttachments = nullptr;
-    renderingInfo.pDepthAttachment = &depthAttachment;
+    for (uint32_t cascadeIdx = 0; cascadeIdx < m_cascadeCount; ++cascadeIdx) {
+        VkRenderingAttachmentInfo depthAttachment{};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = m_shadowMap->cascadeImageView(cascadeIdx);
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
-    vkCmdBeginRendering(cmd, &renderingInfo);
+        VkRenderingInfo renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderingInfo.renderArea.offset = {0, 0};
+        renderingInfo.renderArea.extent = shadowExtent;
+        renderingInfo.layerCount = 1;
+        renderingInfo.colorAttachmentCount = 0;
+        renderingInfo.pColorAttachments = nullptr;
+        renderingInfo.pDepthAttachment = &depthAttachment;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
+        vkCmdBeginRendering(cmd, &renderingInfo);
 
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(shadowExtent.width);
-    viewport.height = static_cast<float>(shadowExtent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
 
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = shadowExtent;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(shadowExtent.width);
+        viewport.height = static_cast<float>(shadowExtent.height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-    // Apply slope-scaled depth bias for depth-only shadow rasterization
-    vkCmdSetDepthBias(cmd, 1.25f, 0.0f, 1.75f);
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = shadowExtent;
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    const glm::mat4 lightSpaceMatrix = computeLightSpaceMatrix();
+        // Slope-scaled depth bias for depth-only shadow rasterization
+        const float biasConstant = 1.25f + static_cast<float>(cascadeIdx) * 0.25f;
+        const float biasSlope = 1.75f + static_cast<float>(cascadeIdx) * 0.35f;
+        vkCmdSetDepthBias(cmd, biasConstant, 0.0f, biasSlope);
 
-    const Mesh* lastBoundMesh = nullptr;
-    for (const auto& obj : m_renderObjects) {
-        if (!obj.mesh) {
-            continue;
+        const glm::mat4& lightSpaceMatrix = m_cascadeMatrices[cascadeIdx];
+
+        const Mesh* lastBoundMesh = nullptr;
+        for (const auto& obj : m_renderObjects) {
+            if (!obj.mesh) {
+                continue;
+            }
+
+            const ShadowPushConstants shadowPc{
+                .lightSpaceMatrix = lightSpaceMatrix,
+                .model = obj.computeModelMatrix()
+            };
+
+            vkCmdPushConstants(
+                cmd,
+                m_shadowPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(ShadowPushConstants),
+                &shadowPc
+            );
+
+            if (obj.mesh != lastBoundMesh) {
+                obj.mesh->bind(cmd);
+                lastBoundMesh = obj.mesh;
+            }
+
+            obj.mesh->draw(cmd);
+            ++m_shadowDrawCalls;
         }
 
-        const ShadowPushConstants shadowPc{
-            .lightSpaceMatrix = lightSpaceMatrix,
-            .model = obj.computeModelMatrix()
-        };
-
-        vkCmdPushConstants(
-            cmd,
-            m_shadowPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            sizeof(ShadowPushConstants),
-            &shadowPc
-        );
-
-        if (obj.mesh != lastBoundMesh) {
-            obj.mesh->bind(cmd);
-            lastBoundMesh = obj.mesh;
-        }
-
-        obj.mesh->draw(cmd);
-        ++m_shadowDrawCalls;
+        vkCmdEndRendering(cmd);
     }
-
-    vkCmdEndRendering(cmd);
 
     m_shadowMap->transitionToShaderRead(cmd);
 }

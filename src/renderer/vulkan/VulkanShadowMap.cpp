@@ -48,16 +48,18 @@ VkFormat VulkanShadowMap::findShadowDepthFormat(VkPhysicalDevice physicalDevice)
     throw std::runtime_error("Failed to find a supported sampled Vulkan depth format for shadow mapping.");
 }
 
-VulkanShadowMap::VulkanShadowMap(const VulkanDevice& device, uint32_t resolution)
+VulkanShadowMap::VulkanShadowMap(const VulkanDevice& device, uint32_t resolution, uint32_t cascadeCount)
     : m_device(device)
     , m_resolution(resolution)
+    , m_cascadeCount(cascadeCount)
     , m_format(findShadowDepthFormat(device.getPhysicalDevice())) {
     createResources();
     SIDERA_LOG_INFO(
         "ShadowMap",
-        "Created directional shadow map ({}x{} px, format: {}).",
+        "Created cascaded directional shadow map ({}x{} px, {} cascades, format: {}).",
         m_resolution,
         m_resolution,
+        m_cascadeCount,
         depthFormatToString(m_format)
     );
 }
@@ -65,23 +67,26 @@ VulkanShadowMap::VulkanShadowMap(const VulkanDevice& device, uint32_t resolution
 VulkanShadowMap::~VulkanShadowMap() {
     SIDERA_LOG_INFO(
         "ShadowMap",
-        "Destroying directional shadow map ({}x{} px)...",
+        "Destroying cascaded shadow map ({}x{} px, {} cascades)...",
         m_resolution,
-        m_resolution
+        m_resolution,
+        m_cascadeCount
     );
     cleanup();
 }
 
-void VulkanShadowMap::recreate(uint32_t resolution) {
+void VulkanShadowMap::recreate(uint32_t resolution, uint32_t cascadeCount) {
     cleanup();
     m_resolution = resolution;
+    m_cascadeCount = cascadeCount;
     m_format = findShadowDepthFormat(m_device.getPhysicalDevice());
     createResources();
     SIDERA_LOG_INFO(
         "ShadowMap",
-        "Recreated directional shadow map ({}x{} px, format: {}).",
+        "Recreated cascaded shadow map ({}x{} px, {} cascades, format: {}).",
         m_resolution,
         m_resolution,
+        m_cascadeCount,
         depthFormatToString(m_format)
     );
 }
@@ -96,7 +101,7 @@ void VulkanShadowMap::createResources() {
     imageInfo.extent.height = m_resolution;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
+    imageInfo.arrayLayers = m_cascadeCount;
     imageInfo.format = m_format;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -132,21 +137,42 @@ void VulkanShadowMap::createResources() {
             "Failed to bind shadow map image memory"
         );
 
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = m_image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = m_format;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
+        // 1. Array image view covering all cascade layers (for shader sampling as sampler2DArray)
+        VkImageViewCreateInfo arrayViewInfo{};
+        arrayViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        arrayViewInfo.image = m_image;
+        arrayViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        arrayViewInfo.format = m_format;
+        arrayViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        arrayViewInfo.subresourceRange.baseMipLevel = 0;
+        arrayViewInfo.subresourceRange.levelCount = 1;
+        arrayViewInfo.subresourceRange.baseArrayLayer = 0;
+        arrayViewInfo.subresourceRange.layerCount = m_cascadeCount;
 
         VK_CHECK(
-            vkCreateImageView(logicalDevice, &viewInfo, nullptr, &m_imageView),
-            "Failed to create shadow map VkImageView"
+            vkCreateImageView(logicalDevice, &arrayViewInfo, nullptr, &m_imageView),
+            "Failed to create shadow map array VkImageView"
         );
+
+        // 2. Individual 2D image views for each cascade layer (for dynamic rendering depth attachment)
+        m_cascadeImageViews.resize(m_cascadeCount, VK_NULL_HANDLE);
+        for (uint32_t i = 0; i < m_cascadeCount; ++i) {
+            VkImageViewCreateInfo layerViewInfo{};
+            layerViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            layerViewInfo.image = m_image;
+            layerViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            layerViewInfo.format = m_format;
+            layerViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            layerViewInfo.subresourceRange.baseMipLevel = 0;
+            layerViewInfo.subresourceRange.levelCount = 1;
+            layerViewInfo.subresourceRange.baseArrayLayer = i;
+            layerViewInfo.subresourceRange.layerCount = 1;
+
+            VK_CHECK(
+                vkCreateImageView(logicalDevice, &layerViewInfo, nullptr, &m_cascadeImageViews[i]),
+                "Failed to create cascade shadow map VkImageView"
+            );
+        }
 
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -199,7 +225,7 @@ void VulkanShadowMap::transitionToAttachment(VkCommandBuffer cmd) const noexcept
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = m_cascadeCount;
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -226,7 +252,7 @@ void VulkanShadowMap::transitionToShaderRead(VkCommandBuffer cmd) const noexcept
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = m_cascadeCount;
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -247,6 +273,13 @@ void VulkanShadowMap::cleanup() noexcept {
         vkDestroySampler(logicalDevice, m_sampler, nullptr);
         m_sampler = VK_NULL_HANDLE;
     }
+
+    for (VkImageView view : m_cascadeImageViews) {
+        if (view != VK_NULL_HANDLE) {
+            vkDestroyImageView(logicalDevice, view, nullptr);
+        }
+    }
+    m_cascadeImageViews.clear();
 
     if (m_imageView != VK_NULL_HANDLE) {
         vkDestroyImageView(logicalDevice, m_imageView, nullptr);

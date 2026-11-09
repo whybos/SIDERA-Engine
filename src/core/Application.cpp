@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.12.0";
+constexpr std::string_view kEngineVersion = "v0.13.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -21,8 +21,10 @@ Application::Application(const ApplicationConfig& config)
                  m_config.clearColor,
                  m_config.shadowsEnabled,
                  m_config.shadowResolution,
-                 m_config.showShadowMap ? 1u : 0u)
+                 m_config.cascadeCount,
+                 m_config.showCascades ? 1u : (m_config.showShadowMap ? 2u : 0u))
     , m_baseTitle(m_config.window.title) {
+    m_renderer.setCascadeLambda(m_config.cascadeLambda);
     m_statsEnabled = m_config.startWithStats;
     m_limiterEnabled = m_config.targetFps > 0.0f;
     if (m_config.stressTest) {
@@ -50,16 +52,18 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
 
     const char* debugModeStr = "none";
     switch (m_renderer.getShadowDebugMode()) {
-        case 1: debugModeStr = "PIP"; break;
-        case 2: debugModeStr = "depth"; break;
-        case 3: debugModeStr = "factor"; break;
+        case 1: debugModeStr = "cascades"; break;
+        case 2: debugModeStr = "PIP"; break;
+        case 3: debugModeStr = "depth"; break;
+        case 4: debugModeStr = "factor"; break;
         default: break;
     }
 
     const std::string shadowInfo = m_renderer.isShadowsEnabled()
-        ? std::format("shadows ON ({}x{}){}",
+        ? std::format("CSM ON ({}x{} {}c){}",
                       m_renderer.getShadowResolution(),
                       m_renderer.getShadowResolution(),
+                      m_renderer.getCascadeCount(),
                       m_renderer.getShadowDebugMode() > 0 ? std::format(" [dbg:{}]", debugModeStr) : "")
         : "shadows OFF";
 
@@ -152,10 +156,16 @@ void Application::run() {
         }
         if (f7Down && !f7WasDown) {
             m_renderer.cycleShadowDebugMode();
-            const char* dbgNames[] = {"OFF", "PIP thumbnail (top-right)", "Fullscreen depth map", "Shadow factor mask"};
+            const char* dbgNames[] = {
+                "OFF",
+                "Cascade split colors (Red=Near, Green=Mid-near, Blue=Mid-far, Yellow=Far)",
+                "PIP thumbnail (Cascade 0)",
+                "Fullscreen depth map (Cascade 0)",
+                "Shadow factor mask"
+            };
             SIDERA_LOG_INFO("Core", "Shadow debug mode: {} ({}).",
                             m_renderer.getShadowDebugMode(),
-                            dbgNames[m_renderer.getShadowDebugMode() % 4]);
+                            dbgNames[m_renderer.getShadowDebugMode() % 5]);
         }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
