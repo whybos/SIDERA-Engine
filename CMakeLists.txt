@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.9.0
+    VERSION 0.10.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -89,6 +89,16 @@ else()
     message(STATUS "[SIDERA] Found system GLM.")
 endif()
 
+# 4. stb (pinned to v2.30 for stb_image HDR loading)
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(stb)
+
+
 # ------------------------------------------------------------------------------
 # Shader Compilation Pipeline (GLSL -> SPIR-V)
 # ------------------------------------------------------------------------------
@@ -113,6 +123,10 @@ endif()
 set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_convolution.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_cubemap.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/brdf_lut.comp
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -180,6 +194,10 @@ set(SIDERA_SOURCES
     src/renderer/vulkan/VulkanDepthBuffer.cpp
     src/renderer/vulkan/VulkanTexture.h
     src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanCubemap.h
+    src/renderer/vulkan/VulkanCubemap.cpp
+    src/renderer/IBLBuilder.h
+    src/renderer/IBLBuilder.cpp
     src/renderer/vulkan/VulkanFrameSync.h
     src/renderer/vulkan/VulkanFrameSync.cpp
     src/renderer/vulkan/VulkanShader.h
@@ -204,6 +222,7 @@ add_custom_command(TARGET sidera POST_BUILD
 target_include_directories(sidera
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
 )
 
 target_compile_definitions(sidera

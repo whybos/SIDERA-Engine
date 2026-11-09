@@ -40,25 +40,45 @@ void imageBarrier(VkCommandBuffer cmd,
     dep.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(cmd, &dep);
 }
+
+size_t getFormatBytesPerPixel(VkFormat format) noexcept {
+    switch (format) {
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_R8G8B8A8_UNORM:
+            return 4;
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            return 8;
+        case VK_FORMAT_R32G32B32A32_SFLOAT:
+            return 16;
+        case VK_FORMAT_R16G16_SFLOAT:
+            return 4;
+        default:
+            return 4;
+    }
+}
 } // namespace
 
 VulkanTexture::VulkanTexture(const VulkanDevice& device,
                              VkCommandPool transferCommandPool,
-                             const void* rgbaPixels,
+                             const void* rawPixels,
                              uint32_t width,
                              uint32_t height,
+                             VkFormat format,
+                             VkImageUsageFlags additionalUsage,
                              std::string_view name)
     : m_device(device)
     , m_name(name)
     , m_width(width)
-    , m_height(height) {
-    if (!rgbaPixels || width == 0 || height == 0) {
+    , m_height(height)
+    , m_format(format)
+    , m_usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | additionalUsage) {
+    if (!rawPixels || width == 0 || height == 0) {
         throw std::invalid_argument("VulkanTexture requires pixel data and non-zero dimensions.");
     }
 
     try {
         createImageAndMemory();
-        uploadPixelsToImage(transferCommandPool, rgbaPixels);
+        uploadPixelsToImage(transferCommandPool, rawPixels);
         createImageView();
         createSampler();
     } catch (...) {
@@ -66,8 +86,37 @@ VulkanTexture::VulkanTexture(const VulkanDevice& device,
         throw;
     }
 
-    SIDERA_LOG_INFO("Texture", "Created 2D Texture '{}' ({}x{} px, VK_FORMAT_R8G8B8A8_SRGB, DEVICE_LOCAL).",
-                    m_name, m_width, m_height);
+    SIDERA_LOG_INFO("Texture", "Created 2D Texture '{}' ({}x{} px, format: 0x{:X}, DEVICE_LOCAL).",
+                    m_name, m_width, m_height, static_cast<uint32_t>(m_format));
+}
+
+VulkanTexture::VulkanTexture(const VulkanDevice& device,
+                             uint32_t width,
+                             uint32_t height,
+                             VkFormat format,
+                             VkImageUsageFlags usage,
+                             std::string_view name)
+    : m_device(device)
+    , m_name(name)
+    , m_width(width)
+    , m_height(height)
+    , m_format(format)
+    , m_usage(usage | VK_IMAGE_USAGE_SAMPLED_BIT) {
+    if (width == 0 || height == 0) {
+        throw std::invalid_argument("VulkanTexture requires non-zero dimensions.");
+    }
+
+    try {
+        createImageAndMemory();
+        createImageView();
+        createSampler();
+    } catch (...) {
+        cleanup();
+        throw;
+    }
+
+    SIDERA_LOG_INFO("Texture", "Created empty 2D Texture '{}' ({}x{} px, format: 0x{:X}).",
+                    m_name, m_width, m_height, static_cast<uint32_t>(m_format));
 }
 
 VulkanTexture::~VulkanTexture() {
@@ -118,7 +167,7 @@ std::unique_ptr<VulkanTexture> VulkanTexture::createProceduralTestTexture(
     }
 
     return std::make_unique<VulkanTexture>(device, transferCommandPool, pixels.data(), width, height,
-                                           "ProceduralUVGrid");
+                                           VK_FORMAT_R8G8B8A8_SRGB, 0, "ProceduralUVGrid");
 }
 
 void VulkanTexture::createImageAndMemory() {
@@ -133,7 +182,7 @@ void VulkanTexture::createImageAndMemory() {
     info.format = m_format;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    info.usage = m_usage;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -152,12 +201,13 @@ void VulkanTexture::createImageAndMemory() {
     VK_CHECK(vkBindImageMemory(dev, m_image, m_memory, 0), "Failed to bind texture memory");
 }
 
-void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* rgbaPixels) {
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(m_width) * m_height * 4u;
+void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels) {
+    const size_t bpp = getFormatBytesPerPixel(m_format);
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(m_width) * m_height * bpp;
 
     VulkanBuffer staging(m_device, byteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    staging.uploadData(rgbaPixels, byteSize, 0);
+    staging.uploadData(pixels, byteSize, 0);
 
     const VkDevice dev = m_device.getLogicalDevice();
 
@@ -237,9 +287,9 @@ void VulkanTexture::createSampler() {
     s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     s.magFilter = VK_FILTER_LINEAR;
     s.minFilter = VK_FILTER_LINEAR;
-    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 
     if (m_device.isSamplerAnisotropyEnabled()) {
         s.anisotropyEnable = VK_TRUE;
@@ -249,7 +299,7 @@ void VulkanTexture::createSampler() {
         s.maxAnisotropy = 1.0f;
     }
 
-    s.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    s.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
     s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     s.minLod = 0.0f;
     s.maxLod = 0.0f;

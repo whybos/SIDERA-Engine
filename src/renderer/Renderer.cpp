@@ -95,6 +95,7 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
     try {
         createCommandPoolsAndBuffers();
         m_albedoTexture = VulkanTexture::createProceduralTestTexture(m_context.getDevice(), m_commandPools[0], 256, 256);
+        m_iblMaps = IBLBuilder::build(m_context.getDevice(), m_commandPools[0]);
         createCameraDescriptorResources();
 
         m_pipeline = std::make_unique<GraphicsPipeline>(
@@ -111,6 +112,7 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
         destroySceneMeshes();
         m_pipeline.reset();
         destroyCameraDescriptorResources();
+        m_iblMaps = {};
         m_albedoTexture.reset();
         destroyCommandPools();
         throw;
@@ -150,6 +152,7 @@ Renderer::~Renderer() {
     destroySceneMeshes();
     m_pipeline.reset();
     destroyCameraDescriptorResources();
+    m_iblMaps = {};
     m_albedoTexture.reset();
     destroyCommandPools();
     m_frameSync.reset();
@@ -240,7 +243,31 @@ void Renderer::createCameraDescriptorResources() {
     samplerLayoutBinding.descriptorCount = 1;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+    VkDescriptorSetLayoutBinding irradianceLayoutBinding{};
+    irradianceLayoutBinding.binding = 2;
+    irradianceLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    irradianceLayoutBinding.descriptorCount = 1;
+    irradianceLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding prefilteredLayoutBinding{};
+    prefilteredLayoutBinding.binding = 3;
+    prefilteredLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    prefilteredLayoutBinding.descriptorCount = 1;
+    prefilteredLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding brdfLutLayoutBinding{};
+    brdfLutLayoutBinding.binding = 4;
+    brdfLutLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    brdfLutLayoutBinding.descriptorCount = 1;
+    brdfLutLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const std::array<VkDescriptorSetLayoutBinding, 5> bindings = {
+        uboLayoutBinding,
+        samplerLayoutBinding,
+        irradianceLayoutBinding,
+        prefilteredLayoutBinding,
+        brdfLutLayoutBinding
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -254,7 +281,7 @@ void Renderer::createCameraDescriptorResources() {
 
     const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight}
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 4}
     }};
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -304,7 +331,22 @@ void Renderer::createCameraDescriptorResources() {
         imageInfo.imageView = m_albedoTexture->imageView();
         imageInfo.sampler = m_albedoTexture->sampler();
 
-        std::array<VkWriteDescriptorSet, 2> writes{};
+        VkDescriptorImageInfo irrInfo{};
+        irrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        irrInfo.imageView = m_iblMaps.irradianceMap->imageView();
+        irrInfo.sampler = m_iblMaps.irradianceMap->sampler();
+
+        VkDescriptorImageInfo prefInfo{};
+        prefInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        prefInfo.imageView = m_iblMaps.prefilteredMap->imageView();
+        prefInfo.sampler = m_iblMaps.prefilteredMap->sampler();
+
+        VkDescriptorImageInfo lutInfo{};
+        lutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        lutInfo.imageView = m_iblMaps.brdfLut->imageView();
+        lutInfo.sampler = m_iblMaps.brdfLut->sampler();
+
+        std::array<VkWriteDescriptorSet, 5> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_cameraDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -318,6 +360,27 @@ void Renderer::createCameraDescriptorResources() {
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &imageInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_cameraDescriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &irrInfo;
+
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = m_cameraDescriptorSets[i];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &prefInfo;
+
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = m_cameraDescriptorSets[i];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo = &lutInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }

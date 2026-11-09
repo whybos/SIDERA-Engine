@@ -12,6 +12,9 @@ layout(set = 0, binding = 0) uniform SceneUBO {
 } scene;
 
 layout(set = 0, binding = 1) uniform sampler2D uAlbedoMap;
+layout(set = 0, binding = 2) uniform samplerCube uIrradianceMap;
+layout(set = 0, binding = 3) uniform samplerCube uPrefilteredMap;
+layout(set = 0, binding = 4) uniform sampler2D uBrdfLut;
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
@@ -26,7 +29,8 @@ layout(location = 3) in vec2 fragUV;
 
 layout(location = 0) out vec4 outColor;
 
-const float PI = 3.14159265359;
+const float PI = 3.14159265358979323846;
+const float MAX_REFLECTION_LOD = 4.0; // 5 mip levels: 0, 1, 2, 3, 4
 
 // Trowbridge-Reitz GGX normal distribution
 float distributionGGX(vec3 N, vec3 H, float roughness) {
@@ -57,7 +61,7 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// Cook-Torrance radiance contribution of a single light
+// Cook-Torrance radiance contribution of a direct light
 vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float metallic, float roughness, vec3 F0) {
     vec3 H = normalize(V + L);
     float NdotL = max(dot(N, L), 0.0);
@@ -69,7 +73,7 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, float met
 
     vec3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.0001);
 
-    // Energy conservation: what is reflected specularly is not diffused; metals have no diffuse
+    // Energy conservation
     vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
     return (kD * albedo / PI + specular) * radiance * NdotL;
 }
@@ -84,8 +88,12 @@ void main() {
 
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(scene.cameraPos.xyz - fragWorldPos);
+    vec3 R = reflect(-V, N);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
+    // -----------------------------------------------------------------
+    // 1. Direct Lighting (Sun + Point Lights)
+    // -----------------------------------------------------------------
     vec3 Lo = vec3(0.0);
 
     // Directional sun
@@ -101,19 +109,31 @@ void main() {
         Lo += evaluateLight(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
 
-    // Hemisphere ambient (sky above, ground bounce below) for diffuse + a rough specular term
-    const vec3 skyColor = vec3(0.30, 0.42, 0.62);
-    const vec3 groundColor = vec3(0.10, 0.09, 0.08);
-    vec3 R = reflect(-V, N);
-    vec3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    vec3 irradiance = mix(groundColor, skyColor, N.y * 0.5 + 0.5);
-    vec3 envSpec = mix(groundColor, skyColor, R.y * 0.5 + 0.5);
-    vec3 ambient = (kD * irradiance * albedo + F * envSpec * (1.0 - 0.6 * roughness)) * ao;
+    // -----------------------------------------------------------------
+    // 2. Image-Based Lighting (IBL)
+    // -----------------------------------------------------------------
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
 
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+    // Diffuse IBL: Irradiance convolution map
+    vec3 irradiance = texture(uIrradianceMap, N).rgb;
+    vec3 diffuseIBL = irradiance * albedo;
+
+    // Specular IBL: Prefiltered environment cubemap sampled at LOD = roughness * MAX_LOD
+    vec3 prefilteredColor = textureLod(uPrefilteredMap, R, roughness * MAX_REFLECTION_LOD).rgb;
+    // BRDF integration LUT: x = scale (F0), y = bias
+    vec2 brdf = texture(uBrdfLut, vec2(NdotV, roughness)).rg;
+    vec3 specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
+
+    vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
+
+    // Total radiance
     vec3 color = Lo + ambient;
 
-    // Reinhard tone mapping (output is written to an sRGB swapchain, which applies the gamma curve)
+    // Reinhard tone mapping
     color = color / (color + vec3(1.0));
 
     outColor = vec4(color, 1.0);

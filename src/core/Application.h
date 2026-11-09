@@ -15,7 +15,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1280,
         .height = 720,
-        .title = "SIDERA Engine v0.9.0 - PBR Foundation",
+        .title = "SIDERA Engine v0.10.0 - Image-Based Lighting (IBL)",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};

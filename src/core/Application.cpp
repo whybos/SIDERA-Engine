@@ -8,6 +8,10 @@
 
 namespace sidera {
 
+namespace {
+constexpr std::string_view kEngineVersion = "v0.10.0";
+} // namespace
+
 Application::Application(const ApplicationConfig& config)
     : m_config(config)
     , m_window(m_config.window)
@@ -31,8 +35,9 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
     }
 
     const std::string title = std::format(
-        "SIDERA v0.9.0 | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
+        "SIDERA {} | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
         "{}x{} {} | {} draws, {} tris | limiter {}",
+        kEngineVersion,
         r.fps,
         m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
         r.avgMs, r.minMs, r.maxMs,

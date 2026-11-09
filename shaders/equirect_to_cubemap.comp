@@ -1,0 +1,50 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uEquirectangularMap;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray uOutCubemap;
+
+const float PI = 3.14159265358979323846;
+
+vec3 getCubeDirection(vec2 uv, uint face) {
+    // uv in [-1, 1]
+    vec3 dir;
+    switch(face) {
+        case 0: dir = vec3( 1.0, -uv.y, -uv.x); break; // +X
+        case 1: dir = vec3(-1.0, -uv.y,  uv.x); break; // -X
+        case 2: dir = vec3( uv.x,  1.0,  uv.y); break; // +Y
+        case 3: dir = vec3( uv.x, -1.0, -uv.y); break; // -Y
+        case 4: dir = vec3( uv.x, -uv.y,  1.0); break; // +Z
+        case 5: dir = vec3(-uv.x, -uv.y, -1.0); break; // -Z
+    }
+    return normalize(dir);
+}
+
+vec2 dirToEquirect(vec3 v) {
+    // phi in [-PI, PI], theta in [-PI/2, PI/2]
+    vec2 uv = vec2(atan(v.z, v.x), asin(clamp(v.y, -1.0, 1.0)));
+    // scale to [0, 1]
+    uv *= vec2(0.15915494309, 0.31830988618); // 1 / (2*PI), 1 / PI
+    uv += 0.5;
+    return uv;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    uint face = gl_GlobalInvocationID.z;
+    ivec2 size = imageSize(uOutCubemap).xy;
+
+    if (pixel.x >= size.x || pixel.y >= size.y || face >= 6) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 st = uv * 2.0 - 1.0;
+
+    vec3 dir = getCubeDirection(st, face);
+    vec2 eqUV = dirToEquirect(dir);
+
+    vec4 color = texture(uEquirectangularMap, eqUV);
+    imageStore(uOutCubemap, ivec3(pixel, face), color);
+}

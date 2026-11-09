@@ -17,7 +17,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.9.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.10.0...");
         {
             sidera::Application app(config);
             app.run();
