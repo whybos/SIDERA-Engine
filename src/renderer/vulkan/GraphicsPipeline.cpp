@@ -10,12 +10,13 @@ namespace sidera {
 
 GraphicsPipeline::GraphicsPipeline(VkDevice device,
                                    VkFormat colorAttachmentFormat,
+                                   VkDescriptorSetLayout descriptorSetLayout,
                                    const std::filesystem::path& vertSpvPath,
                                    const std::filesystem::path& fragSpvPath)
     : m_device(device)
     , m_colorFormat(colorAttachmentFormat) {
     try {
-        createPipeline(vertSpvPath, fragSpvPath);
+        createPipeline(descriptorSetLayout, vertSpvPath, fragSpvPath);
     } catch (...) {
         destroyPipeline();
         throw;
@@ -26,7 +27,8 @@ GraphicsPipeline::~GraphicsPipeline() {
     destroyPipeline();
 }
 
-void GraphicsPipeline::createPipeline(const std::filesystem::path& vertSpvPath,
+void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
+                                      const std::filesystem::path& vertSpvPath,
                                       const std::filesystem::path& fragSpvPath) {
     VulkanShader vertShader(m_device, vertSpvPath);
     VulkanShader fragShader(m_device, fragSpvPath);
@@ -84,8 +86,8 @@ void GraphicsPipeline::createPipeline(const std::filesystem::path& vertSpvPath,
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -110,8 +112,13 @@ void GraphicsPipeline::createPipeline(const std::filesystem::path& vertSpvPath,
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pSetLayouts = nullptr;
+    if (descriptorSetLayout != VK_NULL_HANDLE) {
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    } else {
+        pipelineLayoutInfo.setLayoutCount = 0;
+        pipelineLayoutInfo.pSetLayouts = nullptr;
+    }
     pipelineLayoutInfo.pushConstantRangeCount = 0;
     pipelineLayoutInfo.pPushConstantRanges = nullptr;
 

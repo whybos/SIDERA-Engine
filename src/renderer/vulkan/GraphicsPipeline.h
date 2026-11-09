@@ -10,6 +10,7 @@ class GraphicsPipeline {
 public:
     GraphicsPipeline(VkDevice device,
                      VkFormat colorAttachmentFormat,
+                     VkDescriptorSetLayout descriptorSetLayout,
                      const std::filesystem::path& vertSpvPath,
                      const std::filesystem::path& fragSpvPath);
     ~GraphicsPipeline();
@@ -24,7 +25,8 @@ public:
     [[nodiscard]] VkFormat getColorFormat() const noexcept { return m_colorFormat; }
 
 private:
-    void createPipeline(const std::filesystem::path& vertSpvPath,
+    void createPipeline(VkDescriptorSetLayout descriptorSetLayout,
+                        const std::filesystem::path& vertSpvPath,
                         const std::filesystem::path& fragSpvPath);
     void destroyPipeline() noexcept;
 

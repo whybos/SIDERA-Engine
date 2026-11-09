@@ -100,6 +100,32 @@ bool Window::isMinimized() const noexcept {
     return fbSize.x == 0 || fbSize.y == 0;
 }
 
+bool Window::isKeyPressed(int key) const noexcept {
+    return glfwGetKey(m_window, key) == GLFW_PRESS;
+}
+
+bool Window::isMouseButtonPressed(int button) const noexcept {
+    return glfwGetMouseButton(m_window, button) == GLFW_PRESS;
+}
+
+glm::vec2 Window::getCursorPosition() const noexcept {
+    double xpos = 0.0;
+    double ypos = 0.0;
+    glfwGetCursorPos(m_window, &xpos, &ypos);
+    return {static_cast<float>(xpos), static_cast<float>(ypos)};
+}
+
+void Window::setCursorCaptured(bool captured) noexcept {
+    if (m_cursorCaptured != captured) {
+        m_cursorCaptured = captured;
+        glfwSetInputMode(
+            m_window,
+            GLFW_CURSOR,
+            captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL
+        );
+    }
+}
+
 std::vector<const char*> Window::getRequiredInstanceExtensions() const {
     uint32_t count = 0;
     const char** extensions = glfwGetRequiredInstanceExtensions(&count);

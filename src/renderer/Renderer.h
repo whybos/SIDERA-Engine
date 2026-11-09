@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/Camera.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
@@ -31,6 +32,9 @@ public:
 
     void drawFrame(Window& window);
 
+    [[nodiscard]] Camera& getCamera() noexcept { return m_camera; }
+    [[nodiscard]] const Camera& getCamera() const noexcept { return m_camera; }
+
     void setClearColor(const glm::vec4& color) noexcept { m_clearColor = color; }
     [[nodiscard]] const glm::vec4& getClearColor() const noexcept { return m_clearColor; }
     [[nodiscard]] uint64_t getRenderedFrameCount() const noexcept { return m_renderedFrames; }
@@ -38,11 +42,14 @@ public:
     [[nodiscard]] const GraphicsPipeline& getPipeline() const noexcept { return *m_pipeline; }
 
 private:
+    void createCameraDescriptorResources();
+    void destroyCameraDescriptorResources() noexcept;
     void createCommandPoolsAndBuffers();
     void destroyCommandPools() noexcept;
     void createGeometryBuffers();
     void destroyGeometryBuffers() noexcept;
 
+    void updateCameraUniformBuffer(uint32_t frameIndex);
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) const;
     void submitCommandBuffer(VkCommandBuffer cmd,
                              VkSemaphore waitSemaphore,
@@ -51,8 +58,16 @@ private:
     void recreateSwapchain(Window& window);
 
     const VulkanContext& m_context;
+    Camera m_camera;
+
     std::unique_ptr<VulkanSwapchain> m_swapchain;
     std::unique_ptr<VulkanFrameSync> m_frameSync;
+
+    VkDescriptorSetLayout m_cameraDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kMaxFramesInFlight> m_cameraDescriptorSets{};
+    std::array<std::unique_ptr<VulkanBuffer>, kMaxFramesInFlight> m_cameraUniformBuffers;
+
     std::unique_ptr<GraphicsPipeline> m_pipeline;
     std::unique_ptr<VulkanBuffer> m_vertexBuffer;
     std::unique_ptr<VulkanBuffer> m_indexBuffer;

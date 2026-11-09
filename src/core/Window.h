@@ -39,6 +39,13 @@ public:
     [[nodiscard]] bool wasResized() const noexcept { return m_framebufferResized; }
     void resetResizedFlag() noexcept { m_framebufferResized = false; }
 
+    // Input queries for 3D camera control
+    [[nodiscard]] bool isKeyPressed(int key) const noexcept;
+    [[nodiscard]] bool isMouseButtonPressed(int button) const noexcept;
+    [[nodiscard]] glm::vec2 getCursorPosition() const noexcept;
+    void setCursorCaptured(bool captured) noexcept;
+    [[nodiscard]] bool isCursorCaptured() const noexcept { return m_cursorCaptured; }
+
     [[nodiscard]] std::vector<const char*> getRequiredInstanceExtensions() const;
     [[nodiscard]] VkSurfaceKHR createSurface(VkInstance instance) const;
 
@@ -51,6 +58,7 @@ private:
     WindowConfig m_config;
     GLFWwindow* m_window = nullptr;
     bool m_framebufferResized = false;
+    bool m_cursorCaptured = false;
 };
 
 } // namespace sidera
