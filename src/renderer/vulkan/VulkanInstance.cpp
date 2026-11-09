@@ -67,9 +67,9 @@ VulkanInstance::VulkanInstance(std::string_view appName,
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = appNameStr.c_str();
-    appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 0, 10, 0);
+    appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 0, 11, 0);
     appInfo.pEngineName = "SIDERA Engine";
-    appInfo.engineVersion = VK_MAKE_API_VERSION(0, 0, 10, 0);
+    appInfo.engineVersion = VK_MAKE_API_VERSION(0, 0, 11, 0);
     appInfo.apiVersion = VK_API_VERSION_1_3;
 
     // Verify all required platform/window extensions are supported by the Vulkan loader

@@ -28,6 +28,27 @@ Window::Window(const WindowConfig& config)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, m_config.resizable ? GLFW_TRUE : GLFW_FALSE);
 
+    GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
+    if (primaryMonitor) {
+        const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor);
+        int workX = 0, workY = 0, workW = 0, workH = 0;
+        glfwGetMonitorWorkarea(primaryMonitor, &workX, &workY, &workW, &workH);
+        if (mode) {
+            SIDERA_LOG_INFO(
+                "Window",
+                "Primary monitor: {}x{} @ {}Hz (usable desktop workarea: {}x{} px).",
+                mode->width, mode->height, mode->refreshRate, workW, workH
+            );
+        }
+        if (static_cast<int>(m_config.width) > workW || static_cast<int>(m_config.height) > workH) {
+            SIDERA_LOG_WARN(
+                "Window",
+                "Requested resolution ({}x{}) exceeds desktop workarea ({}x{}). Window manager will adjust accordingly.",
+                m_config.width, m_config.height, workW, workH
+            );
+        }
+    }
+
     m_window = glfwCreateWindow(
         static_cast<int>(m_config.width),
         static_cast<int>(m_config.height),
@@ -46,8 +67,8 @@ Window::Window(const WindowConfig& config)
     glfwSetKeyCallback(m_window, keyCallback);
 
     const auto fbSize = getFramebufferSize();
-    SIDERA_LOG_INFO("Window", "Created window '{}' ({}x{} px)",
-                    m_config.title, fbSize.x, fbSize.y);
+    SIDERA_LOG_INFO("Window", "Created window '{}' (requested: {}x{}, actual framebuffer: {}x{} px)",
+                    m_config.title, m_config.width, m_config.height, fbSize.x, fbSize.y);
 }
 
 Window::~Window() {

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.10.0
+    VERSION 0.11.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -177,6 +177,8 @@ set(SIDERA_SOURCES
     src/renderer/Vertex.h
     src/renderer/Mesh.h
     src/renderer/Mesh.cpp
+    src/renderer/ProceduralMeshes.h
+    src/renderer/ProceduralMeshes.cpp
     src/renderer/Camera.h
     src/renderer/Camera.cpp
     src/renderer/Renderer.h

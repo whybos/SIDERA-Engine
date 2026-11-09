@@ -1,6 +1,7 @@
 #include "renderer/Renderer.h"
 #include "core/Log.h"
 #include "core/Window.h"
+#include "renderer/ProceduralMeshes.h"
 #include "renderer/Vertex.h"
 #include "renderer/vulkan/VulkanCheck.h"
 #include "renderer/vulkan/VulkanContext.h"
@@ -82,8 +83,8 @@ Renderer::Renderer(const VulkanContext& context, const Window& window, const glm
         swapExtent.height
     );
 
-    m_camera.setPosition({2.40f, 1.85f, 3.10f});
-    m_camera.setOrientation(-128.0f, -24.0f);
+    m_camera.setPosition({0.0f, 2.30f, 4.60f});
+    m_camera.setOrientation(-90.0f, -18.0f);
     m_camera.setViewportSize(swapExtent.width, swapExtent.height);
 
     m_frameSync = std::make_unique<VulkanFrameSync>(
@@ -485,26 +486,251 @@ void Renderer::destroyCommandPools() noexcept {
     }
 }
 
+void Renderer::setStressTestMode(bool enabled) {
+    if (m_stressTestMode == enabled) {
+        return;
+    }
+    m_context.waitIdle();
+    m_stressTestMode = enabled;
+    destroySceneMeshes();
+    createSceneMeshes();
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "Scene complexity updated -> Mode: {} (draw calls: {}, total triangles: {})",
+        m_stressTestMode ? "STRESS TEST (>= 1,000,000 tris)" : "NORMAL HIGH-QUALITY (>= 250,000 tris)",
+        getDrawCallCount(),
+        getTriangleCount()
+    );
+}
+
+void Renderer::toggleStressTestMode() {
+    setStressTestMode(!m_stressTestMode);
+}
+
 void Renderer::createSceneMeshes() {
     const VulkanDevice& dev = m_context.getDevice();
-    m_groundMesh = Mesh::createGroundGrid(dev, m_commandPools[0], 2.4f, 6);
-    m_cubeMesh = Mesh::createCube(dev, m_commandPools[0], 0.45f);
-    m_pyramidMesh = Mesh::createPyramid(dev, m_commandPools[0], 0.45f, 0.95f);
-    m_sphereMesh = Mesh::createSphere(dev, m_commandPools[0], 0.28f, 32, 48);
+    const VkCommandPool pool = m_commandPools[0];
 
     m_renderObjects.clear();
 
-    // Ground (dielectric, rough, textured)
+    if (!m_stressTestMode) {
+        // -------------------------------------------------------------
+        // NORMAL HIGH-QUALITY SCENE (>= 250,000 visible triangles)
+        // -------------------------------------------------------------
+        m_groundMesh = Mesh::createGroundGrid(dev, pool, 6.0f, 16);
+        m_sphereMesh = Mesh::createSphere(dev, pool, 0.20f, 32, 48);
+        m_cubeMesh = Mesh::createCube(dev, pool, 0.45f);
+        m_pyramidMesh = Mesh::createPyramid(dev, pool, 0.45f, 0.95f);
+
+        // A. High-resolution Icosphere (subdivisions = 5 -> 20,480 triangles each)
+        m_icosphereMesh = ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 5, "Icosphere_Subdiv5");
+
+        // B. Mechanical Gear with teeth, hub, bore, and recessed web (~32,000 triangles each)
+        m_gearMesh = ProceduralMeshes::createGear(dev, pool, 30, 0.65f, 0.48f, 0.18f, 0.16f, 16, "Gear_High");
+
+        // C. High-polygon Torus (144 x 64 -> 18,432 triangles each)
+        m_torusMesh = ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 144, 64, "Torus_High");
+
+        // D. Procedural Torus Knot (360 x 64 -> 46,080 triangles each)
+        m_torusKnotMesh = ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 360, 64, "TorusKnot_High");
+
+        // E. Detailed Multi-Part Turbine Rotor with 30 twisted airfoil blades (~38,000 triangles each)
+        m_turbineMesh = ProceduralMeshes::createTurbine(dev, pool, 30, 0.20f, 0.68f, 0.35f, 35.0f, 16, 16, "Turbine_High");
+    } else {
+        // -------------------------------------------------------------
+        // HIGH-POLY STRESS-TEST SCENE (>= 1,000,000 visible triangles)
+        // -------------------------------------------------------------
+        m_groundMesh = Mesh::createGroundGrid(dev, pool, 6.0f, 24);
+        m_sphereMesh = Mesh::createSphere(dev, pool, 0.20f, 32, 48);
+        m_cubeMesh = Mesh::createCube(dev, pool, 0.45f);
+        m_pyramidMesh = Mesh::createPyramid(dev, pool, 0.45f, 0.95f);
+
+        // A. High-resolution Icosphere (subdivisions = 6 -> 81,920 triangles each)
+        m_icosphereMesh = ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 6, "Icosphere_Subdiv6");
+
+        // B. Mechanical Gear (40 teeth, 28 radial rings -> ~50,000 triangles each)
+        m_gearMesh = ProceduralMeshes::createGear(dev, pool, 40, 0.65f, 0.48f, 0.18f, 0.16f, 28, "Gear_Ultra");
+
+        // C. High-polygon Torus (320 x 128 -> 81,920 triangles each)
+        m_torusMesh = ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 320, 128, "Torus_Ultra");
+
+        // D. Procedural Torus Knot (720 x 128 -> 184,320 triangles each)
+        m_torusKnotMesh = ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 720, 128, "TorusKnot_Ultra");
+
+        // E. Detailed Turbine Rotor (48 blades, 24 span x 30 chord -> ~80,000 triangles each)
+        m_turbineMesh = ProceduralMeshes::createTurbine(dev, pool, 48, 0.20f, 0.68f, 0.35f, 35.0f, 24, 30, "Turbine_Ultra");
+    }
+
+    // -----------------------------------------------------------------
+    // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT
+    // -----------------------------------------------------------------
+    // 1. Ground platform (textured dielectric, high roughness)
     m_renderObjects.push_back(RenderObject{
         .mesh = m_groundMesh.get(),
-        .position = {0.0f, -0.50f, 0.0f},
-        .albedo = {1.0f, 1.0f, 1.0f},
+        .position = {0.0f, -0.60f, 0.0f},
+        .albedo = {0.95f, 0.95f, 0.95f},
         .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f
     });
 
-    // Sphere showcase: roughness 0.10 -> 0.90 along X.
-    //  Front row (z = +0.55): dielectric (metallic 0), red plastic
-    //  Back row  (z = -0.35): metal (metallic 1), gold
+    // 2. Centerpiece Turbine 1: Machined Titanium
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_turbineMesh.get(),
+        .position = {0.0f, 0.52f, -0.45f},
+        .rotationAxis = {0.0f, 0.0f, 1.0f},
+        .angularSpeed = 0.45f,
+        .albedo = {0.84f, 0.85f, 0.88f},
+        .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 3. Centerpiece Torus Knot 1: Polished Mirror Chrome
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusKnotMesh.get(),
+        .position = {0.0f, 1.50f, -1.75f},
+        .rotationAxis = {0.25f, 1.0f, 0.15f},
+        .angularSpeed = 0.35f,
+        .albedo = {0.96f, 0.96f, 0.98f},
+        .metallic = 1.0f, .roughness = 0.04f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 4. Centerpiece Turbine 2: Cast Industrial Steel (elevated back)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_turbineMesh.get(),
+        .position = {0.0f, 1.75f, -3.10f},
+        .rotationAxis = {0.12f, 0.0f, 1.0f},
+        .angularSpeed = -0.30f,
+        .albedo = {0.62f, 0.64f, 0.68f},
+        .metallic = 1.0f, .roughness = 0.48f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 5. Left Flank Gear 1: Polished Brass / Gold
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_gearMesh.get(),
+        .position = {-2.25f, 0.15f, -0.65f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = -0.40f,
+        .albedo = {1.00f, 0.78f, 0.34f},
+        .metallic = 1.0f, .roughness = 0.12f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 6. Left Flank Torus 1: Platinum
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusMesh.get(),
+        .position = {-2.35f, 0.35f, 0.85f},
+        .rotationAxis = {1.0f, 0.4f, 0.2f},
+        .angularSpeed = 0.35f,
+        .albedo = {0.90f, 0.89f, 0.88f},
+        .metallic = 1.0f, .roughness = 0.08f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 7. Left Flank Icosphere 1: Smooth Emerald Dielectric
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_icosphereMesh.get(),
+        .position = {-1.35f, -0.08f, 1.55f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = 0.20f,
+        .albedo = {0.06f, 0.75f, 0.35f},
+        .metallic = 0.0f, .roughness = 0.05f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 8. Right Flank Torus Knot 2: Brushed Copper
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusKnotMesh.get(),
+        .position = {2.25f, 0.50f, -0.65f},
+        .rotationAxis = {-0.25f, 1.0f, 0.20f},
+        .angularSpeed = 0.30f,
+        .albedo = {0.95f, 0.64f, 0.54f},
+        .metallic = 1.0f, .roughness = 0.28f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 9. Right Flank Gear 2: Industrial Dark Gunmetal
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_gearMesh.get(),
+        .position = {2.35f, 0.15f, 0.85f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = 0.40f,
+        .albedo = {0.38f, 0.40f, 0.44f},
+        .metallic = 1.0f, .roughness = 0.40f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 10. Right Flank Icosphere 2: Frosted Ruby Dielectric
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_icosphereMesh.get(),
+        .position = {1.35f, -0.08f, 1.55f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = -0.20f,
+        .albedo = {0.85f, 0.08f, 0.18f},
+        .metallic = 0.0f, .roughness = 0.40f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 11. Right Background Torus 2: Cobalt Blue Metal
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusMesh.get(),
+        .position = {1.35f, 1.45f, -2.60f},
+        .rotationAxis = {0.4f, 0.5f, 0.7f},
+        .angularSpeed = -0.30f,
+        .albedo = {0.25f, 0.50f, 0.92f},
+        .metallic = 1.0f, .roughness = 0.60f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 12. Far Background Left: Polished Teal Metal Pyramid
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {-3.0f, 0.15f, -3.40f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = 0.35f,
+        .angularSpeed = 0.25f,
+        .albedo = {0.25f, 0.85f, 0.80f},
+        .metallic = 1.0f, .roughness = 0.18f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 13. Far Background Center: Textured Rotating Cube
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_cubeMesh.get(),
+        .position = {0.0f, 0.15f, -4.10f},
+        .rotationAxis = {0.2f, 1.0f, 0.1f},
+        .rotationRadians = 0.40f,
+        .angularSpeed = 0.35f,
+        .albedo = {0.95f, 0.95f, 0.95f},
+        .metallic = 0.0f, .roughness = 0.45f, .ao = 1.0f, .textureStrength = 1.0f
+    });
+
+    // 14. Far Background Right: Royal Blue Dielectric Pyramid
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_pyramidMesh.get(),
+        .position = {3.0f, 0.15f, -3.40f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .rotationRadians = -0.50f,
+        .angularSpeed = -0.25f,
+        .albedo = {0.28f, 0.42f, 0.95f},
+        .metallic = 0.0f, .roughness = 0.55f, .ao = 1.0f, .textureStrength = 0.0f
+    });
+
+    // 15. Additional Stress-Test Exclusive Showcase Objects
+    if (m_stressTestMode) {
+        // Sapphire Dielectric Icosphere
+        m_renderObjects.push_back(RenderObject{
+            .mesh = m_icosphereMesh.get(),
+            .position = {-3.10f, 0.35f, -1.65f},
+            .rotationAxis = {0.0f, 1.0f, 0.0f},
+            .angularSpeed = 0.30f,
+            .albedo = {0.10f, 0.28f, 0.92f},
+            .metallic = 0.0f, .roughness = 0.15f, .ao = 1.0f, .textureStrength = 0.0f
+        });
+
+        // Amber Dielectric Icosphere
+        m_renderObjects.push_back(RenderObject{
+            .mesh = m_icosphereMesh.get(),
+            .position = {3.10f, 0.35f, -1.65f},
+            .rotationAxis = {0.0f, 1.0f, 0.0f},
+            .angularSpeed = -0.30f,
+            .albedo = {0.95f, 0.58f, 0.08f},
+            .metallic = 0.0f, .roughness = 0.25f, .ao = 1.0f, .textureStrength = 0.0f
+        });
+    }
+
+    // 16. Foreground Sphere Showcase: 10 spheres demonstrating roughness progression
+    //  Front row (z = +2.45): dielectric red plastic (roughness 0.08 -> 0.90)
+    //  Back row  (z = +2.00): gold metal (roughness 0.08 -> 0.90)
     constexpr int kColumns = 5;
     for (int row = 0; row < 2; ++row) {
         const bool metal = (row == 1);
@@ -512,50 +738,32 @@ void Renderer::createSceneMeshes() {
             const float t = static_cast<float>(col) / static_cast<float>(kColumns - 1);
             m_renderObjects.push_back(RenderObject{
                 .mesh = m_sphereMesh.get(),
-                .position = {-1.4f + 0.70f * static_cast<float>(col), -0.50f + 0.28f, metal ? -0.35f : 0.55f},
+                .position = {-1.0f + 0.50f * static_cast<float>(col), -0.60f + 0.20f, metal ? 2.00f : 2.45f},
                 .albedo = metal ? glm::vec3{1.00f, 0.77f, 0.34f} : glm::vec3{0.80f, 0.10f, 0.08f},
                 .metallic = metal ? 1.0f : 0.0f,
-                .roughness = 0.10f + 0.80f * t,
+                .roughness = 0.08f + 0.82f * t,
                 .ao = 1.0f,
                 .textureStrength = 0.0f
             });
         }
     }
 
-    // Slowly rotating textured cube (dielectric, mid roughness)
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_cubeMesh.get(),
-        .position = {0.0f, -0.05f, -1.55f},
-        .rotationAxis = {0.15f, 1.0f, 0.10f},
-        .rotationRadians = 0.4f,
-        .angularSpeed = 0.35f,
-        .albedo = {0.95f, 0.95f, 0.95f},
-        .metallic = 0.0f, .roughness = 0.45f, .ao = 1.0f, .textureStrength = 1.0f
-    });
-
-    // Polished teal metal pyramid (left) and rough dielectric pyramid (right)
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_pyramidMesh.get(),
-        .position = {-1.55f, -0.025f, -1.45f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = 0.35f,
-        .angularSpeed = 0.45f,
-        .albedo = {0.30f, 0.85f, 0.80f},
-        .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f, .textureStrength = 0.0f
-    });
-    m_renderObjects.push_back(RenderObject{
-        .mesh = m_pyramidMesh.get(),
-        .position = {1.55f, -0.025f, -1.45f},
-        .rotationAxis = {0.0f, 1.0f, 0.0f},
-        .rotationRadians = -0.50f,
-        .angularSpeed = -0.50f,
-        .albedo = {0.35f, 0.45f, 0.95f},
-        .metallic = 0.0f, .roughness = 0.65f, .ao = 1.0f, .textureStrength = 0.0f
-    });
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "Scene initialized ({} objects, {} visible triangles across {} draw calls).",
+        m_renderObjects.size(),
+        getTriangleCount(),
+        getDrawCallCount()
+    );
 }
 
 void Renderer::destroySceneMeshes() noexcept {
     m_renderObjects.clear();
+    m_turbineMesh.reset();
+    m_torusKnotMesh.reset();
+    m_torusMesh.reset();
+    m_gearMesh.reset();
+    m_icosphereMesh.reset();
     m_sphereMesh.reset();
     m_pyramidMesh.reset();
     m_cubeMesh.reset();

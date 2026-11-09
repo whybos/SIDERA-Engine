@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.10.0";
+constexpr std::string_view kEngineVersion = "v0.11.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -20,6 +20,15 @@ Application::Application(const ApplicationConfig& config)
     , m_baseTitle(m_config.window.title) {
     m_statsEnabled = m_config.startWithStats;
     m_limiterEnabled = m_config.targetFps > 0.0f;
+    if (m_config.stressTest) {
+        m_renderer.setStressTestMode(true);
+    }
+    if (m_config.cameraPos) {
+        m_renderer.getCamera().setPosition(*m_config.cameraPos);
+    }
+    if (m_config.cameraYaw && m_config.cameraPitch) {
+        m_renderer.getCamera().setOrientation(*m_config.cameraYaw, *m_config.cameraPitch);
+    }
     SIDERA_LOG_INFO("Core", "SIDERA Engine initialized.");
 }
 
@@ -36,7 +45,7 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
 
     const std::string title = std::format(
         "SIDERA {} | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
-        "{}x{} {} | {} draws, {} tris | limiter {}",
+        "{}x{} {} | {} draws, {} tris | limiter {}{}",
         kEngineVersion,
         r.fps,
         m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
@@ -44,7 +53,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         r.onePercentLowFps,
         extent.width, extent.height, presentMode,
         m_renderer.getDrawCallCount(), m_renderer.getTriangleCount(),
-        m_limiterEnabled ? "ON" : "OFF"
+        m_limiterEnabled ? "ON" : "OFF",
+        m_renderer.isStressTestMode() ? " | STRESS MODE" : ""
     );
     m_window.setTitle(title);
 
@@ -60,7 +70,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 frame limiter, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress-test mode, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -74,6 +84,7 @@ void Application::run() {
     bool testedResizeStep2 = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
+    bool f5WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -82,9 +93,11 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F3: toggle performance stats (shown in the window title). F4: toggle the frame limiter.
+        // F3: toggle performance stats. F4: toggle frame limiter. F5: toggle high-poly stress-test mode.
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
+        const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
+
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
             m_frameStats.reset();
@@ -99,8 +112,16 @@ void Application::run() {
             SIDERA_LOG_INFO("Core", "Frame limiter {} (target {:.0f} FPS).",
                             m_limiterEnabled ? "ON" : "OFF", m_config.targetFps);
         }
+        if (f5Down && !f5WasDown) {
+            m_renderer.toggleStressTestMode();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Toggled stress-test mode: {} (visible triangles: {}).",
+                            m_renderer.isStressTestMode() ? "ON (>= 1,000,000 tris)" : "OFF (>= 250,000 tris)",
+                            m_renderer.getTriangleCount());
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
+        f5WasDown = f5Down;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);
@@ -114,7 +135,6 @@ void Application::run() {
         }
 
         // Frame limiter: sleep most of the remaining budget, then yield-spin the last ~1.5 ms
-        // (Windows sleep granularity is too coarse for a precise 60 FPS cap).
         if (m_limiterEnabled && m_config.targetFps > 0.0f && !m_window.isMinimized()) {
             const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                 std::chrono::duration<double>(1.0 / static_cast<double>(m_config.targetFps)));
@@ -167,11 +187,11 @@ void Application::run() {
                     "[SmokeTest] Pitch limit clamp verified: maxPitch={:.1f} deg, minPitch={:.1f} deg",
                     maxClamped, minClamped
                 );
-                cam.setOrientation(-128.0f, -24.0f);
+                cam.setOrientation(-90.0f, -18.0f);
             } else if (!testedResizeStep1 && elapsed >= std::chrono::milliseconds(700)) {
                 testedResizeStep1 = true;
-                SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window to 1024x576...");
-                m_window.setSize(1024, 576);
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window to 1280x720...");
+                m_window.setSize(1280, 720);
             } else if (!testedMinimize && elapsed >= std::chrono::milliseconds(1050)) {
                 testedMinimize = true;
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Minimizing window...");
@@ -182,8 +202,8 @@ void Application::run() {
                 m_window.restore();
             } else if (!testedResizeStep2 && elapsed >= std::chrono::milliseconds(1800)) {
                 testedResizeStep2 = true;
-                SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window back to 1280x720...");
-                m_window.setSize(1280, 720);
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window back to 1920x1080 (1080p default)...");
+                m_window.setSize(1920, 1080);
             } else if (elapsed >= std::chrono::milliseconds(2250)) {
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Frame loop verification complete; requesting close.");
                 m_window.requestClose();

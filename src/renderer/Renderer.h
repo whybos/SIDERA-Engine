@@ -81,6 +81,10 @@ public:
     [[nodiscard]] uint32_t getDrawCallCount() const noexcept { return static_cast<uint32_t>(m_renderObjects.size()); }
     [[nodiscard]] uint32_t getTriangleCount() const noexcept;
 
+    void setStressTestMode(bool enabled);
+    void toggleStressTestMode();
+    [[nodiscard]] bool isStressTestMode() const noexcept { return m_stressTestMode; }
+
 private:
     void createCameraDescriptorResources();
     void destroyCameraDescriptorResources() noexcept;
@@ -113,10 +117,17 @@ private:
 
     std::unique_ptr<GraphicsPipeline> m_pipeline;
 
+    bool m_stressTestMode = false;
+
     std::unique_ptr<Mesh> m_groundMesh;
     std::unique_ptr<Mesh> m_cubeMesh;
     std::unique_ptr<Mesh> m_pyramidMesh;
     std::unique_ptr<Mesh> m_sphereMesh;
+    std::unique_ptr<Mesh> m_icosphereMesh;
+    std::unique_ptr<Mesh> m_gearMesh;
+    std::unique_ptr<Mesh> m_torusMesh;
+    std::unique_ptr<Mesh> m_torusKnotMesh;
+    std::unique_ptr<Mesh> m_turbineMesh;
     std::vector<RenderObject> m_renderObjects;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

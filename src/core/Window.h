@@ -10,9 +10,9 @@
 namespace sidera {
 
 struct WindowConfig {
-    uint32_t width = 1280;
-    uint32_t height = 720;
-    std::string title = "SIDERA Engine";
+    uint32_t width = 1920;
+    uint32_t height = 1080;
+    std::string title = "SIDERA Engine v0.11.0 - 1080p High-Poly Scene";
     bool resizable = true;
 };
 

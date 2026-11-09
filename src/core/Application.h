@@ -5,23 +5,29 @@
 #include "renderer/Renderer.h"
 #include "renderer/vulkan/VulkanContext.h"
 
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <optional>
 #include <string>
 
 namespace sidera {
 
 struct ApplicationConfig {
     WindowConfig window{
-        .width = 1280,
-        .height = 720,
-        .title = "SIDERA Engine v0.10.0 - Image-Based Lighting (IBL)",
+        .width = 1920,
+        .height = 1080,
+        .title = "SIDERA Engine v0.11.0 - 1080p High-Poly Scene",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
     bool smokeTest = false;
     bool startWithStats = false;   // --stats: begin with the F3 overlay enabled
     float targetFps = 60.0f;       // frame limiter target (<= 0 disables); F4 toggles at runtime
+    bool stressTest = false;       // --stress-test: high-poly stress scene (>= 1M triangles)
+    std::optional<glm::vec3> cameraPos;
+    std::optional<float> cameraYaw;
+    std::optional<float> cameraPitch;
 };
 
 class Application {
