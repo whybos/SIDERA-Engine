@@ -131,7 +131,7 @@ public:
     [[nodiscard]] const GraphicsPipeline& getPipeline() const noexcept { return *m_pipeline; }
     [[nodiscard]] uint32_t getDrawCallCount() const noexcept { return static_cast<uint32_t>(m_renderObjects.size()); }
     [[nodiscard]] uint32_t getShadowDrawCallCount() const noexcept { return m_shadowDrawCalls; }
-    [[nodiscard]] uint32_t getTriangleCount() const noexcept;
+    [[nodiscard]] uint64_t getTriangleCount() const noexcept;
 
     // Draw-submission path selection (CPU direct draws vs. GPU-generated indirect draws).
     // Requesting Gpu when it is unavailable keeps the CPU path and logs a warning.
@@ -299,6 +299,7 @@ private:
     uint32_t m_gpuSamples = 0;
 
     bool m_stressTestMode = false;
+    bool m_logNextFrameLifecycle = false;
     bool m_shadowsEnabled = true;
     uint32_t m_shadowDebugMode = 0; // 0=off, 1=cascade colors, 2=PIP thumbnail, 3=fullscreen depth, 4=shadow mask
     float m_shadowDepthBias = 0.0018f;

@@ -71,6 +71,17 @@ int main(int argc, char* argv[]) {
             config.showHiZ = true;
         } else if ((arg == "--instances" || arg == "--instance-count") && i + 1 < argc) {
             config.instanceCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (arg == "--triangles" && i + 1 < argc) {
+            const uint64_t targetTris = std::strtoull(argv[++i], nullptr, 10);
+            config.stressTest = true;
+            if (targetTris > 1000000ull) {
+                // Calculate required instances using average Ultra mesh triangle density (~98,564 tris/instance)
+                uint32_t needed = static_cast<uint32_t>((targetTris - 1152ull) / 98564ull);
+                if (needed < 1) needed = 1;
+                config.instanceCount = needed;
+            }
+        } else if (arg == "--stress" || arg == "--stress-test") {
+            config.stressTest = true;
         } else if (arg == "--viewport-mode" && i + 1 < argc) {
             const std::string_view mode(argv[++i]);
             if (mode == "unlit") config.viewportMode = sidera::ViewportMode::Unlit;

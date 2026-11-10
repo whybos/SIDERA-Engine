@@ -226,6 +226,7 @@ void Application::run() {
     bool testedRestore = false;
     bool testedResizeStep2 = false;
     bool testedViewportModes = false;
+    bool testedStressToggling = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
     bool f5WasDown = false;
@@ -438,7 +439,14 @@ void Application::run() {
                 m_renderer.toggleSplitView();
                 m_renderer.toggleSplitView();
                 m_renderer.setViewportMode(ViewportMode::Lit);
-            } else if (elapsed >= std::chrono::milliseconds(2500)) {
+            } else if (!testedStressToggling && elapsed >= std::chrono::milliseconds(2200)) {
+                testedStressToggling = true;
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Dynamically toggling stress test mode (Normal -> Stress -> Normal)...");
+                m_renderer.toggleStressTestMode(); // ON
+                m_renderer.toggleStressTestMode(); // OFF
+                m_renderer.toggleStressTestMode(); // ON
+                m_renderer.toggleStressTestMode(); // OFF
+            } else if (elapsed >= std::chrono::milliseconds(2700)) {
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Frame loop verification complete; requesting close.");
                 m_window.requestClose();
             }

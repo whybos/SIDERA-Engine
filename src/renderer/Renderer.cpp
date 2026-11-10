@@ -322,6 +322,9 @@ void Renderer::drawFrame(Window& window) {
     // 6. Submit command buffer to graphics queue
     const VkSemaphore renderFinishedSemaphore = m_frameSync->getRenderFinishedSemaphore(imageIndex);
     const VkFence inFlightFence = m_frameSync->getInFlightFence(m_currentFrame);
+    if (m_logNextFrameLifecycle) {
+        SIDERA_LOG_INFO("Renderer", "[StressTest] First stress-test frame submitted.");
+    }
     submitCommandBuffer(cmd, imageAvailableSemaphore, renderFinishedSemaphore, inFlightFence);
 
     const double cpuSubmitMs =
@@ -332,6 +335,11 @@ void Renderer::drawFrame(Window& window) {
 
     // 7. Present the rendered image to the swapchain
     const VkResult presentResult = m_swapchain->present(imageIndex, renderFinishedSemaphore);
+    if (m_logNextFrameLifecycle) {
+        SIDERA_LOG_INFO("Renderer", "[StressTest] First stress-test frame completed successfully (total triangles: {}).",
+                        getTriangleCount());
+        m_logNextFrameLifecycle = false;
+    }
 
     if (presentResult == VK_ERROR_OUT_OF_DATE_KHR ||
         presentResult == VK_SUBOPTIMAL_KHR ||
@@ -1119,6 +1127,8 @@ void Renderer::rebuildGpuScene() {
         m_gpuScene->setSceneBatches(m_batchManager);
         updateGpuDescriptors();
         m_commandsGenerated = m_gpuScene->getCommandsGenerated();
+        SIDERA_LOG_INFO("Renderer", "[StressTest] GPU buffers allocated and indirect commands generated ({} commands).",
+                        m_commandsGenerated);
     } catch (const std::exception& e) {
         // Callers guarantee the GPU is idle here, so the GPU-driven resources can be released.
         SIDERA_LOG_ERROR("GpuDriven", "GPU scene build failed ({}); falling back to the CPU-driven path.", e.what());
@@ -1388,11 +1398,14 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
     }
 }
 
-uint32_t Renderer::getTriangleCount() const noexcept {
-    uint32_t triangles = 0;
+uint64_t Renderer::getTriangleCount() const noexcept {
+    uint64_t triangles = 0;
     for (const auto& batch : m_batchManager.getBatches()) {
         if (batch && batch->getMesh()) {
-            triangles += batch->getInstanceCount() * (batch->getMesh()->getIndexCount() / 3);
+            const uint64_t instances = static_cast<uint64_t>(batch->getInstanceCount());
+            const uint64_t indexCount = static_cast<uint64_t>(batch->getMesh()->getIndexCount());
+            const uint64_t meshTriangles = indexCount / 3ull;
+            triangles += instances * meshTriangles;
         }
     }
     return triangles;
@@ -1445,10 +1458,15 @@ void Renderer::setStressTestMode(bool enabled) {
     if (m_stressTestMode == enabled) {
         return;
     }
+    SIDERA_LOG_INFO("Renderer", "[StressTest] Stress test change requested -> {}", enabled ? "ON" : "OFF");
+    SIDERA_LOG_INFO("Renderer", "[StressTest] Waiting for in-flight frames (m_context.waitIdle())...");
     m_context.waitIdle();
     m_stressTestMode = enabled;
     destroySceneMeshes();
+    SIDERA_LOG_INFO("Renderer", "[StressTest] Old scene resources released.");
     createSceneMeshes();
+    SIDERA_LOG_INFO("Renderer", "[StressTest] Scene rebuild completed.");
+    m_logNextFrameLifecycle = true;
     SIDERA_LOG_INFO(
         "Renderer",
         "Scene complexity updated -> Mode: {} (draw calls: {}, total triangles: {})",
@@ -1467,6 +1485,9 @@ void Renderer::createSceneMeshes() {
     const VkCommandPool pool = m_commandPools[0];
 
     m_renderObjects.clear();
+    m_batchManager.clear();
+    m_gpuInstances.clear();
+    m_gpuBatches.clear();
 
     if (!m_stressTestMode) {
         // -------------------------------------------------------------
@@ -1515,6 +1536,8 @@ void Renderer::createSceneMeshes() {
         // E. Detailed Turbine Rotor (48 blades, 24 span x 30 chord -> ~80,000 triangles each)
         m_turbineMesh = ProceduralMeshes::createTurbine(dev, pool, 48, 0.20f, 0.68f, 0.35f, 35.0f, 24, 30, "Turbine_Ultra");
     }
+
+    SIDERA_LOG_INFO("Renderer", "[StressTest] New meshes created (mode: {}).", m_stressTestMode ? "STRESS TEST" : "NORMAL");
 
     // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT
@@ -1809,6 +1832,9 @@ void Renderer::createSceneMeshes() {
         m_batchManager.rebuildGlobalOffsets();
     }
 
+    SIDERA_LOG_INFO("Renderer", "[StressTest] Instance batches rebuilt ({} batches, {} instances).",
+                    m_batchManager.getBatchCount(), m_batchManager.getTotalInstanceCount());
+
     SIDERA_LOG_INFO(
         "Renderer",
         "Scene initialized ({} total instances, {} triangles across {} batches).",
@@ -1822,6 +1848,9 @@ void Renderer::createSceneMeshes() {
 
 void Renderer::destroySceneMeshes() noexcept {
     m_renderObjects.clear();
+    m_batchManager.clear();
+    m_gpuInstances.clear();
+    m_gpuBatches.clear();
     m_turbineMesh.reset();
     m_torusKnotMesh.reset();
     m_torusMesh.reset();
