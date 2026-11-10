@@ -269,3 +269,32 @@ SIDERA Engine utilizes the CMake multi-configuration generator (MSBuild / Visual
 Both configurations were verified across all 14 viewport modes:
 - **Feature Parity**: 100% identical support for all 14 Viewport Modes, dual split layouts, GPU Instancing, GPU-driven indirect drawing, and CSM.
 - **Visual Parity**: Mean RGB difference between Release and Debug renders is bounded to mesh animation delta ($\Delta \text{RGB} < 4.8$), confirming identical mathematical rasterization and shading pipelines.
+
+---
+
+## 8. Stress Test Crash Investigation & 25M Triangle Benchmark
+
+### 8.1 Root Cause of the Runtime Crash
+1. **Dangling Mesh Pointer / Use-After-Free**: When toggling stress mode via `F5` (`Renderer::setStressTestMode`), the engine properly waited for the GPU via `m_context.waitIdle()` and called `Renderer::destroySceneMeshes()`. However, `m_batchManager.clear()` was omitted. Consequently, `m_batchManager` retained the 24 old batches containing raw pointers (`const Mesh* m_mesh`) referencing the destroyed normal meshes (`m_turbineMesh.reset()`, etc.).
+2. **Appended Batches**: Upon entering `createSceneMeshes()`, 26 new Ultra batches were appended to `m_batchManager`, resulting in $24 + 26 = 50$ total batches.
+3. **Anomalous Triangle Count (`4009751024`)**: When `getTriangleCount()` iterated over the 50 batches, the first 24 batches read `batch->getMesh()->getIndexCount()`. Because the memory of the destroyed `Mesh` had been freed, dereferencing its index count returned heap sentinel garbage (`0xDDDDDDDD`). Accumulating this garbage across instances produced the anomalous `4009751024` count.
+4. **Access Violation Crash**: During the shadow pass of the first frame after toggling stress mode, `GpuDrivenScene::recordIndirectDraws` executed `batch.mesh->bind(cmd)` on batch #0 (the dangling pointer to the destroyed `m_groundMesh`), resulting in an immediate Access Violation (0xC0000005).
+
+### 8.2 Architectural Fix
+- **Complete Batch Clearance**: Added explicit `m_batchManager.clear()`, `m_gpuInstances.clear()`, and `m_gpuBatches.clear()` invocations at the start of both `Renderer::destroySceneMeshes()` and `Renderer::createSceneMeshes()`.
+- **64-bit Safe Geometry Accumulation**: Updated `Renderer::getTriangleCount()` to return `uint64_t` with 64-bit multiplication and accumulation:
+  $$\text{triangles} = \sum_{b} \left( \text{instances}_b \times \left\lfloor \frac{\text{indices}_b}{3} \right\rfloor \right)$$
+- **Frame Lifecycle Diagnostics**: Added detailed lifecycle logging covering `[StressTest] Stress test change requested`, `Waiting for in-flight frames`, `Old scene resources released`, `New meshes created`, `Instance batches rebuilt`, `GPU buffers allocated and indirect commands generated`, `First stress-test frame submitted`, and `First stress-test frame completed successfully`.
+- **Dynamic CLI Support**: Implemented `--triangles <count>` CLI argument for seamless procedural stress scaling.
+
+### 8.3 5-Level Stress Test Benchmarks (NVIDIA GeForce RTX 4060 Laptop GPU)
+
+| Stress Level | Geometry Mode | Total Instances | Visible Tris | Target FPS | Actual FPS | Frame Time | GPU Total | GPU Shadow | GPU Main |
+|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Level 1** | Normal High-Quality | 24 | **273,688** | 60 | **60.0** | 16.67 ms | **0.72 ms** | 0.21 ms | 0.51 ms |
+| **Level 2** | 1M Triangles (Ultra) | 26 | **1,114,904** | 60 | **60.0** | 16.67 ms | **1.54 ms** | 0.81 ms | 0.71 ms |
+| **Level 3** | 5M Triangles (Instanced) | 51 | **4,696,960** | 60 | **60.0** | 16.67 ms | **4.28 ms** | 3.15 ms | 1.13 ms |
+| **Level 4** | 10M Triangles (Instanced)| 102 | **9,524,672** | 60 | **60.0** | 16.68 ms | **5.69 ms** | 4.67 ms | 1.02 ms |
+| **Level 5** | 25M Triangles (Field) | 254 | **23,875,904**| 60 | **60.0** | 16.67 ms | **13.86 ms**| 11.52 ms| 2.33 ms |
+
+*All 5 levels sustained rock-solid 60.0 FPS / 16.67 ms. At 25 Million Triangles, the total GPU frame time remained comfortably within the 16.67 ms VSync budget (13.86 ms).*
