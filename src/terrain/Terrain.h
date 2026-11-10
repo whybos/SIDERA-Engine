@@ -51,6 +51,7 @@ public:
               const VulkanDevice& device,
               VkCommandPool transferCommandPool,
               TextureManager& textureManager);
+    bool initHeadless(const TerrainConfig& config);
     void rebuild(const TerrainConfig& newConfig);
     void destroy() noexcept;
 

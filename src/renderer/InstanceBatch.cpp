@@ -128,7 +128,7 @@ void InstanceBatchManager::populateGpuData(std::vector<GpuInstanceData>& outInst
 
         const Material& mat = batch->getMaterial();
         const glm::vec4 albedoMetallic(mat.albedo, mat.metallic);
-        const glm::vec4 roughnessAoTex(mat.roughness, mat.ao, mat.textureStrength, mat.normalMapStrength);
+        const glm::vec4 roughnessAoTex(mat.roughness, mat.ao, mat.textureStrength, mat.alphaCutoff);
 
         for (uint32_t i = 0; i < count; ++i) {
             const Instance& inst = batch->getInstances()[i];
@@ -137,7 +137,7 @@ void InstanceBatchManager::populateGpuData(std::vector<GpuInstanceData>& outInst
             gData.model = inst.transform;
             gData.albedoMetallic = albedoMetallic;
             gData.roughnessAoTex = roughnessAoTex;
-            gData.meshInfo = glm::uvec4(b, 1u, inst.customId, 0u);
+            gData.meshInfo = glm::uvec4(b, 1u, inst.customId, inst.flags | mat.flags);
             gData.boundingSphere = glm::vec4(inst.worldSphere.center, inst.worldSphere.radius);
             gData.aabbMin = glm::vec4(inst.worldAabb.min, 0.0f);
             gData.aabbMax = glm::vec4(inst.worldAabb.max, 0.0f);

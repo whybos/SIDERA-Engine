@@ -24,6 +24,10 @@
 #include "lod/LODGroup.h"
 #include "lod/LODManager.h"
 #include "lod/LODStats.h"
+#include "foliage/FoliageConfig.h"
+#include "foliage/FoliageStats.h"
+#include "foliage/FoliageSystem.h"
+#include "foliage/FoliageRenderer.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -103,6 +107,8 @@ struct alignas(16) SceneUniformData {
     glm::vec4 shadowParams{1.0f, 0.0018f, 3.0f, 0.0f};
     glm::vec4 cascadeParams{4.0f, 0.15f, 0.75f, 50.0f};
     glm::vec4 screenParams{1920.0f, 1080.0f, 0.0f, 0.0f};
+    glm::vec4 windParams{1.0f, 0.35f, 0.45f, 1.25f};
+    glm::vec4 timeParams{0.0f, 0.85f, 0.35f, 1.0f};
 };
 
 class Renderer {
@@ -238,6 +244,21 @@ public:
     [[nodiscard]] bool isTerrainEnabled() const noexcept { return m_terrainEnabled; }
     void setTerrainEnabled(bool enabled) noexcept { m_terrainEnabled = enabled; }
     void toggleTerrain() noexcept { m_terrainEnabled = !m_terrainEnabled; }
+
+    // Foliage Rendering (Milestone 20)
+    [[nodiscard]] FoliageRenderer* getFoliageRenderer() noexcept { return m_foliageRenderer.get(); }
+    [[nodiscard]] const FoliageRenderer* getFoliageRenderer() const noexcept { return m_foliageRenderer.get(); }
+    [[nodiscard]] FoliageSystem* getFoliageSystem() noexcept { return m_foliageSystem.get(); }
+    [[nodiscard]] const FoliageSystem* getFoliageSystem() const noexcept { return m_foliageSystem.get(); }
+    [[nodiscard]] const FoliageStatistics& getFoliageStats() const noexcept;
+    [[nodiscard]] bool isFoliageEnabled() const noexcept;
+    void setFoliageEnabled(bool enabled) noexcept;
+    void toggleFoliage() noexcept;
+    [[nodiscard]] bool isWindEnabled() const noexcept;
+    void setWindEnabled(bool enabled) noexcept;
+    void toggleWind() noexcept;
+    void setWindStrength(float strength) noexcept;
+    void setWindSpeed(float speed) noexcept;
 
 private:
     void createCameraDescriptorResources();
@@ -396,6 +417,11 @@ private:
     bool m_terrainEnabled = true;
     std::unique_ptr<Terrain> m_terrain;
     std::unique_ptr<TerrainRenderer> m_terrainRenderer;
+
+    // Foliage Rendering (Milestone 20)
+    std::unique_ptr<FoliageSystem> m_foliageSystem;
+    std::unique_ptr<FoliageRenderer> m_foliageRenderer;
+    float m_totalTime = 0.0f;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

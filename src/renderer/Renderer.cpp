@@ -142,6 +142,8 @@ Renderer::Renderer(const VulkanContext& context,
         }
         createGpuScene(); // optional; leaves GPU-driven mode unavailable on failure
         createCameraDescriptorResources();
+        m_foliageSystem = std::make_unique<FoliageSystem>();
+        m_foliageRenderer = std::make_unique<FoliageRenderer>(*m_foliageSystem);
 
         m_pipeline = std::make_unique<GraphicsPipeline>(
             m_context.getDevice().getLogicalDevice(),
@@ -238,6 +240,8 @@ Renderer::~Renderer() {
 }
 
 void Renderer::updateScene(float deltaTime) noexcept {
+    m_totalTime += deltaTime;
+
     // 1. Update rotations and evaluate automatic LOD selection (Milestone 19)
     m_lodManager.beginFrameStats();
     const glm::vec3 camPos = m_camera.getPosition();
@@ -280,7 +284,13 @@ void Renderer::updateScene(float deltaTime) noexcept {
     }
     m_lodManager.endFrameStats();
 
-    // 2. Repopulate batches with active LOD meshes
+    // 2. Foliage subsystem update (Milestone 20)
+    bool foliageChanged = false;
+    if (m_foliageRenderer && m_foliageSystem && m_foliageSystem->getConfig().enabled) {
+        foliageChanged = m_foliageRenderer->update(deltaTime, m_camera, vpHeight, m_lodManager);
+    }
+
+    // 3. Repopulate batches with active LOD meshes and foliage
     if (m_instancingMode == InstancingMode::Normal) {
         m_batchManager.clear();
         for (size_t i = 0; i < m_renderObjects.size(); ++i) {
@@ -304,8 +314,13 @@ void Renderer::updateScene(float deltaTime) noexcept {
             inst.position = obj.position;
             m_batchManager.addInstance(obj.mesh, mat, inst);
         }
+
+        if (m_foliageRenderer && m_foliageSystem && m_foliageSystem->getConfig().enabled) {
+            m_foliageRenderer->populateBatches(m_batchManager);
+        }
+
         m_batchManager.rebuildGlobalOffsets();
-        if (isGpuDrivenActive() && lodChanged) {
+        if (isGpuDrivenActive() && (lodChanged || foliageChanged)) {
             m_gpuScene->setSceneBatches(m_batchManager);
         }
     } else {
@@ -1421,6 +1436,26 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
         0.0f
     );
 
+    if (m_foliageSystem) {
+        const auto& fCfg = m_foliageSystem->getConfig();
+        const auto& wCfg = fCfg.wind;
+        ubo.windParams = glm::vec4(
+            wCfg.direction.x,
+            wCfg.direction.y,
+            wCfg.strength,
+            wCfg.speed
+        );
+        ubo.timeParams = glm::vec4(
+            m_totalTime,
+            wCfg.frequency,
+            wCfg.turbulence,
+            fCfg.windEnabled ? 1.0f : 0.0f
+        );
+    } else {
+        ubo.windParams = glm::vec4(1.0f, 0.35f, 0.45f, 1.25f);
+        ubo.timeParams = glm::vec4(m_totalTime, 0.85f, 0.35f, 1.0f);
+    }
+
     m_cameraUniformBuffers[frameIndex]->uploadData(&ubo, sizeof(SceneUniformData), 0);
 
     if (m_gpuScene) {
@@ -1680,6 +1715,13 @@ void Renderer::createSceneMeshes() {
         m_cameraDescriptorSetLayout
     );
     m_terrainRenderer->updateMaterialDescriptors(*m_terrain);
+
+    // -----------------------------------------------------------------
+    // FOLIAGE RENDERING SYSTEM (Milestone 20)
+    // -----------------------------------------------------------------
+    if (m_foliageRenderer && m_foliageSystem) {
+        m_foliageRenderer->initDemoScene(dev, pool, *m_textureManager, m_lodManager, *m_terrain);
+    }
 
     // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
@@ -2093,6 +2135,11 @@ void Renderer::createSceneMeshes() {
         inst.rotationRadians = obj.rotationRadians;
         m_batchManager.addInstance(obj.mesh, mat, inst);
     }
+
+    if (m_foliageRenderer && m_foliageSystem && m_foliageSystem->getConfig().enabled) {
+        m_foliageRenderer->populateBatches(m_batchManager);
+    }
+
     m_batchManager.rebuildGlobalOffsets();
 
     if (m_instancingMode != InstancingMode::Normal) {
@@ -2194,6 +2241,13 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_foliageRenderer.reset();
+    if (m_foliageSystem) {
+        m_foliageSystem->clearInstances();
+    }
+    m_foliageSystem = std::make_unique<FoliageSystem>();
+    m_foliageRenderer = std::make_unique<FoliageRenderer>(*m_foliageSystem);
+
     if (m_terrain) {
         m_terrain->destroy();
     }
@@ -2731,6 +2785,55 @@ void Renderer::toggleSplitView() {
 
 void Renderer::toggleNormalSpace() {
     m_viewportManager.toggleNormalSpace();
+}
+
+const FoliageStatistics& Renderer::getFoliageStats() const noexcept {
+    static const FoliageStatistics s_emptyStats{};
+    return m_foliageSystem ? m_foliageSystem->getStats() : s_emptyStats;
+}
+
+bool Renderer::isFoliageEnabled() const noexcept {
+    return m_foliageSystem && m_foliageSystem->getConfig().enabled;
+}
+
+void Renderer::setFoliageEnabled(bool enabled) noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->setEnabled(enabled);
+    }
+}
+
+void Renderer::toggleFoliage() noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->toggleEnabled();
+    }
+}
+
+bool Renderer::isWindEnabled() const noexcept {
+    return m_foliageSystem && m_foliageSystem->getConfig().windEnabled;
+}
+
+void Renderer::setWindEnabled(bool enabled) noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->setWindEnabled(enabled);
+    }
+}
+
+void Renderer::toggleWind() noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->toggleWind();
+    }
+}
+
+void Renderer::setWindStrength(float strength) noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->setWindStrength(strength);
+    }
+}
+
+void Renderer::setWindSpeed(float speed) noexcept {
+    if (m_foliageSystem) {
+        m_foliageSystem->setWindSpeed(speed);
+    }
 }
 
 } // namespace sidera

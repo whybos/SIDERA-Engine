@@ -20,6 +20,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4 shadowParams;
     vec4 cascadeParams;
     vec4 screenParams;
+    vec4 windParams;            // x, y = windDir.xy (normalized), z = strength, w = speed
+    vec4 timeParams;            // x = time (seconds), y = frequency, z = turbulence, w = windEnabled
 } scene;
 
 // Must match GpuObjectData in src/renderer/GpuDrivenScene.h / InstanceData.h (std430, 160 bytes).
@@ -58,6 +60,29 @@ void main() {
     GpuObjectData obj = objects[objIndex];
 
     vec4 world = obj.model * vec4(inPosition, 1.0);
+
+    // Foliage Wind Animation (Milestone 20)
+    if ((obj.meshInfo.w & 1u) != 0u && scene.timeParams.w > 0.5) {
+        float heightFactor = max(0.0, inPosition.y);
+        float flex = inColor.r > 0.0 ? inColor.r : min(1.0, heightFactor * 0.5);
+        float weight = clamp(heightFactor * flex, 0.0, 3.0);
+
+        vec2 windDir = scene.windParams.xy;
+        float windStrength = scene.windParams.z;
+        float windSpeed = scene.windParams.w;
+        float windFreq = scene.timeParams.y;
+        float windTurb = scene.timeParams.z;
+        float time = scene.timeParams.x;
+
+        float wavePhase = (world.x * windDir.x + world.z * windDir.y) * windFreq + time * windSpeed;
+        float flutter = sin(wavePhase * 2.5 + world.y * 3.0) * windTurb;
+        float sway = (sin(wavePhase) + 0.35 * sin(wavePhase * 0.5) + flutter) * windStrength * weight;
+
+        world.x += windDir.x * sway;
+        world.z += windDir.y * sway;
+        world.y -= abs(sway) * 0.15;
+    }
+
     fragWorldPos = world.xyz;
     fragNormal = normalize(transpose(inverse(mat3(obj.model))) * inNormal);
     fragColor = inColor;

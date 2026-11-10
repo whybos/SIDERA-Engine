@@ -14,6 +14,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4 shadowParams;          // x = enabled, y = bias, z = pcfKernel, w = debugMode
     vec4 cascadeParams;         // x = cascadeCount, y = blendFraction, z = lambda, w = shadowDistance
     vec4 screenParams;          // x = width, y = height
+    vec4 windParams;            // x, y = windDir.xy (normalized), z = strength, w = speed
+    vec4 timeParams;            // x = time (seconds), y = frequency, z = turbulence, w = windEnabled
 } scene;
 
 layout(push_constant) uniform PushConstants {
@@ -192,8 +194,13 @@ void main() {
     float ao        = clamp(fragRoughnessAoTex.y, 0.0, 1.0);
     float texStrength = fragRoughnessAoTex.z;
 
-    // 1. Albedo sampling
-    vec3 sampledAlbedo = texture(uAlbedoMap, fragUV).rgb;
+    // 1. Albedo sampling & Alpha-testing (cutout clipping)
+    vec4 albedoSample = texture(uAlbedoMap, fragUV);
+    float alphaCutoff = fragRoughnessAoTex.w;
+    if (alphaCutoff > 0.0 && albedoSample.a < alphaCutoff) {
+        discard;
+    }
+    vec3 sampledAlbedo = albedoSample.rgb;
     vec3 albedo = fragAlbedoMetallic.rgb * fragColor * mix(vec3(1.0), sampledAlbedo, texStrength);
 
     // 2. Tangent-space Normal mapping via Cotangent Frame

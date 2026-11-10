@@ -135,11 +135,23 @@ int main(int argc, char* argv[]) {
             }
         } else if (arg == "--lod-hysteresis" && i + 1 < argc) {
             config.lodHysteresis = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--foliage") {
+            config.foliageEnabled = true;
+        } else if (arg == "--no-foliage") {
+            config.foliageEnabled = false;
+        } else if (arg == "--wind") {
+            config.windEnabled = true;
+        } else if (arg == "--no-wind") {
+            config.windEnabled = false;
+        } else if (arg == "--wind-strength" && i + 1 < argc) {
+            config.windStrength = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--wind-speed" && i + 1 < argc) {
+            config.windSpeed = std::strtof(argv[++i], nullptr);
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.19.0 (Milestone 19: Level of Detail System)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.20.0 (Milestone 20: Foliage Rendering)...");
         {
             sidera::Application app(config);
             app.run();

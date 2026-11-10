@@ -72,6 +72,27 @@ bool Terrain::init(const TerrainConfig& config,
     return true;
 }
 
+bool Terrain::initHeadless(const TerrainConfig& config) {
+    m_config = config;
+    if (!m_config.heightmapPath.empty() && m_heightmap.loadFromFile(m_config.heightmapPath)) {
+        SIDERA_LOG_INFO("Terrain", "Loaded heightmap from '{}'.", m_config.heightmapPath);
+    } else {
+        m_heightmap.generateProcedural(513, m_config.proceduralSeed, m_config.proceduralOctaves, m_config.proceduralFrequency);
+    }
+
+    const float halfW = m_config.width * 0.5f;
+    const float halfL = m_config.length * 0.5f;
+    m_bounds.aabb.min = glm::vec3(-halfW, m_config.heightOffset, -halfL);
+    m_bounds.aabb.max = glm::vec3(halfW, m_config.heightOffset + m_config.heightScale, halfL);
+    m_bounds.center = (m_bounds.aabb.min + m_bounds.aabb.max) * 0.5f;
+    m_bounds.size = glm::vec2(m_config.width, m_config.length);
+    m_bounds.minHeight = m_bounds.aabb.min.y;
+    m_bounds.maxHeight = m_bounds.aabb.max.y;
+
+    m_initialized = true;
+    return true;
+}
+
 void Terrain::rebuild(const TerrainConfig& newConfig) {
     if (!m_device || !m_textureManager) {
         return;

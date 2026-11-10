@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.19.0
+    VERSION 0.20.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -259,6 +259,18 @@ set(SIDERA_SOURCES
     src/lod/LODManager.cpp
     src/lod/MeshSimplifier.h
     src/lod/MeshSimplifier.cpp
+    src/foliage/FoliageConfig.h
+    src/foliage/FoliageStats.h
+    src/foliage/FoliageType.h
+    src/foliage/FoliageInstance.h
+    src/foliage/FoliageBatch.h
+    src/foliage/FoliageBatch.cpp
+    src/foliage/ProceduralFoliage.h
+    src/foliage/ProceduralFoliage.cpp
+    src/foliage/FoliageSystem.h
+    src/foliage/FoliageSystem.cpp
+    src/foliage/FoliageRenderer.h
+    src/foliage/FoliageRenderer.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -393,5 +405,95 @@ endif()
 target_link_libraries(test_lod
     PRIVATE
         Vulkan::Vulkan
+        glm::glm
+)
+
+# ------------------------------------------------------------------------------
+# Milestone 20 Foliage System Unit Tests
+# ------------------------------------------------------------------------------
+add_executable(test_foliage
+    tests/test_foliage.cpp
+    tests/stb_image_impl.cpp
+    src/foliage/FoliageConfig.h
+    src/foliage/FoliageStats.h
+    src/foliage/FoliageType.h
+    src/foliage/FoliageInstance.h
+    src/foliage/FoliageBatch.h
+    src/foliage/FoliageBatch.cpp
+    src/foliage/ProceduralFoliage.h
+    src/foliage/ProceduralFoliage.cpp
+    src/foliage/FoliageSystem.h
+    src/foliage/FoliageSystem.cpp
+    src/terrain/HeightmapData.h
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainBounds.h
+    src/terrain/TerrainConfig.h
+    src/terrain/TerrainChunk.h
+    src/terrain/TerrainChunk.cpp
+    src/terrain/TerrainMaterial.h
+    src/terrain/TerrainMaterial.cpp
+    src/terrain/Terrain.h
+    src/terrain/Terrain.cpp
+    src/lod/LODLevel.h
+    src/lod/LODConfig.h
+    src/lod/LODStats.h
+    src/lod/LODGroup.h
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.h
+    src/lod/LODManager.cpp
+    src/lod/MeshSimplifier.h
+    src/lod/MeshSimplifier.cpp
+    src/renderer/BoundingVolume.h
+    src/renderer/Frustum.h
+    src/renderer/Camera.h
+    src/renderer/Camera.cpp
+    src/renderer/Mesh.h
+    src/renderer/Mesh.cpp
+    src/renderer/Material.h
+    src/renderer/InstanceData.h
+    src/renderer/InstanceBatch.h
+    src/renderer/InstanceBatch.cpp
+    src/renderer/TextureManager.h
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/SamplerManager.h
+    src/renderer/vulkan/SamplerManager.cpp
+    src/renderer/vulkan/VulkanTexture.h
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.h
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/VulkanBuffer.h
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.h
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/core/Log.h
+    src/core/Log.cpp
+    src/core/Window.h
+    src/core/Window.cpp
+)
+
+target_include_directories(test_foliage
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_foliage
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_foliage PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_foliage PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_foliage PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_foliage
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
         glm::glm
 )

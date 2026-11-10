@@ -33,6 +33,15 @@ struct AABB {
         max = glm::max(max, point);
     }
 
+    void expand(const AABB& other) noexcept {
+        min = glm::min(min, other.min);
+        max = glm::max(max, other.max);
+    }
+
+    [[nodiscard]] constexpr AABB merge(const AABB& other) const noexcept {
+        return AABB{glm::min(min, other.min), glm::max(max, other.max)};
+    }
+
     // Transforms the AABB by an arbitrary 4x4 affine model matrix (translation, rotation, non-uniform scale)
     [[nodiscard]] AABB transform(const glm::mat4& m) const noexcept {
         const glm::vec3 center = getCenter();

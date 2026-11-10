@@ -15,6 +15,8 @@ struct Material {
     float textureStrength = 0.0f;
     glm::vec3 emissive{0.0f, 0.0f, 0.0f};
     float normalMapStrength = 1.0f;
+    float alphaCutoff = 0.0f;
+    uint32_t flags = 0;
 
     [[nodiscard]] constexpr bool operator==(const Material& o) const noexcept {
         return albedo == o.albedo &&
@@ -23,7 +25,9 @@ struct Material {
                ao == o.ao &&
                textureStrength == o.textureStrength &&
                emissive == o.emissive &&
-               normalMapStrength == o.normalMapStrength;
+               normalMapStrength == o.normalMapStrength &&
+               alphaCutoff == o.alphaCutoff &&
+               flags == o.flags;
     }
 };
 
@@ -43,7 +47,8 @@ struct hash<sidera::Material> {
         const size_t h4 = std::hash<float>()(m.emissive.r) ^
                          (std::hash<float>()(m.emissive.g) << 1) ^
                          (std::hash<float>()(m.normalMapStrength) << 2);
-        return h1 ^ (h2 << 3) ^ (h3 << 6) ^ (h4 << 9);
+        const size_t h5 = std::hash<float>()(m.alphaCutoff) ^ (std::hash<uint32_t>()(m.flags) << 1);
+        return h1 ^ (h2 << 3) ^ (h3 << 6) ^ (h4 << 9) ^ (h5 << 12);
     }
 };
 } // namespace std

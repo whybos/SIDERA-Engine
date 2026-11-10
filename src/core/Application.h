@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.19.0 - Level of Detail (LOD) System",
+        .title = "SIDERA Engine v0.20.0 - Foliage Rendering",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -32,6 +32,10 @@ struct ApplicationConfig {
     LODSelectionMode lodMode = LODSelectionMode::Distance; // --lod-mode distance|screenspace
     ForcedLODMode forceLod = ForcedLODMode::Auto;          // --force-lod 0|1|2|3|auto
     float lodHysteresis = 2.5f;    // --lod-hysteresis <val>
+    bool foliageEnabled = true;    // --foliage / --no-foliage
+    bool windEnabled = true;       // --wind / --no-wind
+    float windStrength = 0.45f;    // --wind-strength <val>
+    float windSpeed = 1.25f;       // --wind-speed <val>
     bool shadowsEnabled = true;    // --shadows on/off: directional shadow mapping
     uint32_t shadowResolution = 2048; // --shadow-resolution 1024/2048/4096
     uint32_t cascadeCount = 4;     // --cascade-count 3/4

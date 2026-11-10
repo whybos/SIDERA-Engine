@@ -74,6 +74,32 @@ Mesh::Mesh(const VulkanDevice& device,
     );
 }
 
+Mesh::Mesh(const std::vector<Vertex>& vertices,
+           const std::vector<uint32_t>& indices,
+           std::string_view name)
+    : m_name(name)
+    , m_cpuVertices(vertices)
+    , m_cpuIndices(indices)
+    , m_vertexCount(static_cast<uint32_t>(vertices.size()))
+    , m_indexCount(static_cast<uint32_t>(indices.size())) {
+    glm::vec3 minAabb(std::numeric_limits<float>::max());
+    glm::vec3 maxAabb(std::numeric_limits<float>::lowest());
+    for (const auto& v : vertices) {
+        minAabb = glm::min(minAabb, v.position);
+        maxAabb = glm::max(maxAabb, v.position);
+    }
+    m_localAabb.min = minAabb;
+    m_localAabb.max = maxAabb;
+
+    m_localSphere.center = (minAabb + maxAabb) * 0.5f;
+    float maxDistSq = 0.0f;
+    for (const auto& v : vertices) {
+        const glm::vec3 diff = v.position - m_localSphere.center;
+        maxDistSq = std::max(maxDistSq, glm::dot(diff, diff));
+    }
+    m_localSphere.radius = std::sqrt(maxDistSq);
+}
+
 Mesh::~Mesh() {
     if (m_vertexBuffer || m_indexBuffer) {
         SIDERA_LOG_INFO("Mesh", "Destroying 3D Mesh '{}'...", m_name);

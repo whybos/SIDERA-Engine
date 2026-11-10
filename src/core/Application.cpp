@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.19.0";
+constexpr std::string_view kEngineVersion = "v0.20.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -33,6 +33,10 @@ Application::Application(const ApplicationConfig& config)
     m_renderer.setLODSelectionMode(m_config.lodMode);
     m_renderer.setForcedLOD(m_config.forceLod);
     m_renderer.setLODDistanceHysteresis(m_config.lodHysteresis);
+    m_renderer.setFoliageEnabled(m_config.foliageEnabled);
+    m_renderer.setWindEnabled(m_config.windEnabled);
+    m_renderer.setWindStrength(m_config.windStrength);
+    m_renderer.setWindSpeed(m_config.windSpeed);
     if (m_config.showHiZ) {
         m_renderer.setCullingDebugMode(1);
     }
@@ -199,9 +203,28 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         lodInfo = " | LOD: OFF";
     }
 
+    const auto foliageStats = m_renderer.getFoliageStats();
+    std::string foliageInfo;
+    if (m_renderer.isFoliageEnabled()) {
+        foliageInfo = std::format(" | FOLIAGE: {}/{} inst (trees {}, grass {}, bush {}, fern {}) [L0:{}, L1:{}, L2:{}, L3:{}]{}",
+                                  foliageStats.visibleInstances,
+                                  foliageStats.totalInstances,
+                                  foliageStats.treeInstanceCount,
+                                  foliageStats.grassInstanceCount,
+                                  foliageStats.bushInstanceCount,
+                                  foliageStats.smallVegetationCount,
+                                  foliageStats.lod0Count,
+                                  foliageStats.lod1Count,
+                                  foliageStats.lod2Count,
+                                  foliageStats.lod3Count,
+                                  m_renderer.isWindEnabled() ? " [WIND ON]" : " [WIND OFF]");
+    } else {
+        foliageInfo = " | FOLIAGE: OFF";
+    }
+
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}{}",
         kEngineVersion,
         isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
@@ -217,7 +240,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         m_renderer.isStressTestMode() ? " | STRESS MODE" : "",
         std::format(" | INSTANCING: {}", instancingModeStr),
         vpInfo,
-        lodInfo
+        lodInfo,
+        foliageInfo
     );
     m_window.setTitle(title);
 
@@ -232,7 +256,7 @@ Application::~Application() {
 
 void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
-    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.19.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.20.0 — Runtime Controls Guide:");
     SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
     SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
@@ -242,6 +266,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "  [Culling System]   F9 = Toggle Frustum Culling, F10 = Toggle Occlusion Culling, F11 = Hi-Z Depth View");
     SIDERA_LOG_INFO("Core", "  [GPU Instancing]   F12 = Cycle Instancing (Normal, 100, 1,000, 10,000 instances)");
     SIDERA_LOG_INFO("Core", "  [Level of Detail]  L = Cycle Forced LOD (Auto, Force LOD 0..3), K = Toggle Selection Mode (Dist/Screen)");
+    SIDERA_LOG_INFO("Core", "  [Foliage System]   O = Toggle Foliage Rendering ON/OFF, P = Toggle Foliage Wind Animation ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Viewport Modes]   V = Cycle Viewport Rendering Mode (14 modes)");
     SIDERA_LOG_INFO("Core", "  [Normal Space]     B = Toggle Normal Space (World Space / View Space)");
     SIDERA_LOG_INFO("Core", "  [Viewport Layout]  T = Toggle Viewport Layout (Single / Split Horizontal Dual)");
@@ -249,7 +274,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, O Foliage, P Wind, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -264,6 +289,7 @@ void Application::run() {
     bool testedViewportModes = false;
     bool testedStressToggling = false;
     bool testedLOD = false;
+    bool testedFoliage = false;
     bool f2WasDown = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
@@ -280,6 +306,8 @@ void Application::run() {
     bool tWasDown = false;
     bool lWasDown = false;
     bool kWasDown = false;
+    bool oWasDown = false;
+    bool pWasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -302,6 +330,8 @@ void Application::run() {
         const bool f12Down = m_window.isKeyPressed(GLFW_KEY_F12);
         const bool lDown = m_window.isKeyPressed(GLFW_KEY_L);
         const bool kDown = m_window.isKeyPressed(GLFW_KEY_K);
+        const bool oDown = m_window.isKeyPressed(GLFW_KEY_O);
+        const bool pDown = m_window.isKeyPressed(GLFW_KEY_P);
         const bool vDown = m_window.isKeyPressed(GLFW_KEY_V);
         const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
@@ -384,6 +414,18 @@ void Application::run() {
             SIDERA_LOG_INFO("Core", "LOD selection mode: {}.",
                             getLODSelectionModeName(m_renderer.getLODManager().getConfig().selectionMode));
         }
+        if (oDown && !oWasDown) {
+            m_renderer.toggleFoliage();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Foliage rendering toggled: {}.",
+                            m_renderer.isFoliageEnabled() ? "ENABLED" : "DISABLED");
+        }
+        if (pDown && !pWasDown) {
+            m_renderer.toggleWind();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Foliage wind animation toggled: {}.",
+                            m_renderer.isWindEnabled() ? "ENABLED" : "DISABLED");
+        }
         if (vDown && !vWasDown) {
             m_renderer.cycleViewportMode();
             m_frameStats.reset();
@@ -409,6 +451,8 @@ void Application::run() {
         f12WasDown = f12Down;
         lWasDown = lDown;
         kWasDown = kDown;
+        oWasDown = oDown;
+        pWasDown = pDown;
         vWasDown = vDown;
         bWasDown = bDown;
         tWasDown = tDown;
@@ -521,7 +565,14 @@ void Application::run() {
                 m_renderer.cycleForcedLOD(); // Auto
                 m_renderer.toggleLODSelectionMode(); // Screen-space
                 m_renderer.toggleLODSelectionMode(); // Distance
-            } else if (elapsed >= std::chrono::milliseconds(2850)) {
+            } else if (!testedFoliage && elapsed >= std::chrono::milliseconds(2600)) {
+                testedFoliage = true;
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Toggling foliage and wind animation...");
+                m_renderer.toggleWind(); // OFF
+                m_renderer.toggleWind(); // ON
+                m_renderer.toggleFoliage(); // OFF
+                m_renderer.toggleFoliage(); // ON
+            } else if (elapsed >= std::chrono::milliseconds(3100)) {
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Frame loop verification complete; requesting close.");
                 m_window.requestClose();
             }

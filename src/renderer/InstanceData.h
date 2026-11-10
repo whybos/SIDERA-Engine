@@ -19,6 +19,7 @@ struct Instance {
     float rotationRadians = 0.0f;
     float angularSpeed = 0.0f;
     uint32_t customId = 0;
+    uint32_t flags = 0;
 };
 
 // GPU-resident instance data (std430, 160 bytes, 16-byte aligned)
