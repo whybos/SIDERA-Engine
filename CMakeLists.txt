@@ -497,3 +497,72 @@ target_link_libraries(test_foliage
         glfw
         glm::glm
 )
+
+# ------------------------------------------------------------------------------
+# Pre-Milestone 21 Normal Direction & Shader Audit Unit Tests
+# ------------------------------------------------------------------------------
+add_executable(test_normal_audit
+    tests/test_normal_audit.cpp
+    tests/stb_image_impl.cpp
+    src/core/Log.h
+    src/core/Log.cpp
+    src/core/Window.h
+    src/core/Window.cpp
+    src/renderer/Vertex.h
+    src/renderer/BoundingVolume.h
+    src/renderer/Frustum.h
+    src/renderer/Camera.h
+    src/renderer/Camera.cpp
+    src/renderer/Mesh.h
+    src/renderer/Mesh.cpp
+    src/renderer/ProceduralMeshes.h
+    src/renderer/ProceduralMeshes.cpp
+    src/foliage/ProceduralFoliage.h
+    src/foliage/ProceduralFoliage.cpp
+    src/terrain/TerrainBounds.h
+    src/terrain/TerrainConfig.h
+    src/terrain/HeightmapData.h
+    src/terrain/HeightmapData.cpp
+    src/lod/MeshSimplifier.h
+    src/lod/MeshSimplifier.cpp
+    src/renderer/Material.h
+    src/renderer/TextureManager.h
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/SamplerManager.h
+    src/renderer/vulkan/SamplerManager.cpp
+    src/renderer/vulkan/VulkanTexture.h
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.h
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/VulkanBuffer.h
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.h
+    src/renderer/vulkan/VulkanDevice.cpp
+)
+
+target_include_directories(test_normal_audit
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_normal_audit
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_normal_audit PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_normal_audit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_normal_audit PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_normal_audit
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)

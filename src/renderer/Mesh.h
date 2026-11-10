@@ -64,9 +64,18 @@ public:
     ) const;
 
     [[nodiscard]] static std::unique_ptr<Mesh> createCube(
+        float halfExtent = 0.5f
+    );
+
+    [[nodiscard]] static std::unique_ptr<Mesh> createCube(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
         float halfExtent = 0.5f
+    );
+
+    [[nodiscard]] static std::unique_ptr<Mesh> createPyramid(
+        float halfBase = 0.5f,
+        float height = 1.0f
     );
 
     [[nodiscard]] static std::unique_ptr<Mesh> createPyramid(
@@ -77,10 +86,21 @@ public:
     );
 
     [[nodiscard]] static std::unique_ptr<Mesh> createGroundGrid(
+        float halfExtent = 2.5f,
+        uint32_t subdivisions = 6
+    );
+
+    [[nodiscard]] static std::unique_ptr<Mesh> createGroundGrid(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
         float halfExtent = 2.5f,
         uint32_t subdivisions = 6
+    );
+
+    [[nodiscard]] static std::unique_ptr<Mesh> createSphere(
+        float radius = 0.5f,
+        uint32_t stacks = 32,
+        uint32_t slices = 48
     );
 
     [[nodiscard]] static std::unique_ptr<Mesh> createSphere(

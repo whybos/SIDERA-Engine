@@ -97,6 +97,7 @@ int main(int argc, char* argv[]) {
             else if (mode == "uv") config.viewportMode = sidera::ViewportMode::UV;
             else if (mode == "emissive") config.viewportMode = sidera::ViewportMode::Emissive;
             else if (mode == "shadow_debug" || mode == "shadow") config.viewportMode = sidera::ViewportMode::ShadowDebug;
+            else if (mode == "face_orientation" || mode == "faceorientation" || mode == "face") config.viewportMode = sidera::ViewportMode::FaceOrientation;
             else config.viewportMode = sidera::ViewportMode::Lit;
         } else if (arg == "--split-view") {
             config.splitView = true;

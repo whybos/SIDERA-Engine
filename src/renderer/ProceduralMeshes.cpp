@@ -37,8 +37,6 @@ glm::vec3 computeFaceNormal(const glm::vec3& p0, const glm::vec3& p1, const glm:
 // A. High-Resolution Icosphere
 // ============================================================================
 std::unique_ptr<Mesh> ProceduralMeshes::createIcosphere(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     float radius,
     uint32_t subdivisions,
     std::string_view name
@@ -131,15 +129,24 @@ std::unique_ptr<Mesh> ProceduralMeshes::createIcosphere(
         });
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralMeshes::createIcosphere(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    float radius,
+    uint32_t subdivisions,
+    std::string_view name
+) {
+    const auto cpuMesh = createIcosphere(radius, subdivisions, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // ============================================================================
 // B. High-Polygon Torus
 // ============================================================================
 std::unique_ptr<Mesh> ProceduralMeshes::createTorus(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     float majorRadius,
     float minorRadius,
     uint32_t radialSegments,
@@ -186,24 +193,35 @@ std::unique_ptr<Mesh> ProceduralMeshes::createTorus(
             const uint32_t p3 = i * stride + (j + 1);
 
             indices.push_back(p0);
-            indices.push_back(p1);
             indices.push_back(p2);
+            indices.push_back(p1);
 
             indices.push_back(p0);
-            indices.push_back(p2);
             indices.push_back(p3);
+            indices.push_back(p2);
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralMeshes::createTorus(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    float majorRadius,
+    float minorRadius,
+    uint32_t radialSegments,
+    uint32_t tubularSegments,
+    std::string_view name
+) {
+    const auto cpuMesh = createTorus(majorRadius, minorRadius, radialSegments, tubularSegments, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // ============================================================================
 // C. Procedural Torus Knot (Parallel Transport Frame)
 // ============================================================================
 std::unique_ptr<Mesh> ProceduralMeshes::createTorusKnot(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t p,
     uint32_t q,
     float radius,
@@ -318,24 +336,37 @@ std::unique_ptr<Mesh> ProceduralMeshes::createTorusKnot(
             const uint32_t p3 = i * stride + (j + 1);
 
             indices.push_back(p0);
-            indices.push_back(p1);
             indices.push_back(p2);
+            indices.push_back(p1);
 
             indices.push_back(p0);
-            indices.push_back(p2);
             indices.push_back(p3);
+            indices.push_back(p2);
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralMeshes::createTorusKnot(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t p,
+    uint32_t q,
+    float radius,
+    float tubeRadius,
+    uint32_t curveSegments,
+    uint32_t tubeSegments,
+    std::string_view name
+) {
+    const auto cpuMesh = createTorusKnot(p, q, radius, tubeRadius, curveSegments, tubeSegments, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // ============================================================================
 // D. Detailed Mechanical Gear
 // ============================================================================
 std::unique_ptr<Mesh> ProceduralMeshes::createGear(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t numTeeth,
     float outerRadius,
     float rootRadius,
@@ -441,7 +472,7 @@ std::unique_ptr<Mesh> ProceduralMeshes::createGear(
         const uint32_t r1 = topStart + (r + 1) * totalPerimeterSteps;
         for (uint32_t step = 0; step < totalPerimeterSteps; ++step) {
             const uint32_t next = (step + 1) % totalPerimeterSteps;
-            addQuad(r0 + step, r1 + step, r1 + next, r0 + next);
+            addQuad(r0 + step, r0 + next, r1 + next, r1 + step);
         }
     }
 
@@ -469,7 +500,7 @@ std::unique_ptr<Mesh> ProceduralMeshes::createGear(
         const uint32_t r1 = botStart + (r + 1) * totalPerimeterSteps;
         for (uint32_t step = 0; step < totalPerimeterSteps; ++step) {
             const uint32_t next = (step + 1) % totalPerimeterSteps;
-            addQuad(r0 + step, r0 + next, r1 + next, r1 + step);
+            addQuad(r0 + step, r1 + step, r1 + next, r0 + next);
         }
     }
 
@@ -482,10 +513,10 @@ std::unique_ptr<Mesh> ProceduralMeshes::createGear(
         const float r1 = perimRadii[(step + 1) % totalPerimeterSteps];
 
         const glm::vec3 pTop0(r0 * std::cos(phi0), halfThick, r0 * std::sin(phi0));
+        const glm::vec3 pTop1(r1 * std::cos(phi1), halfThick, r1 * std::sin(phi1));
         const glm::vec3 pBot0(r0 * std::cos(phi0), -halfThick, r0 * std::sin(phi0));
-        const glm::vec3 pBot1(r1 * std::cos(phi1), -halfThick, r1 * std::sin(phi1));
 
-        const glm::vec3 faceNorm = computeFaceNormal(pTop0, pBot0, pBot1);
+        const glm::vec3 faceNorm = computeFaceNormal(pTop1, pTop0, pBot0);
         const uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
 
         for (uint32_t y = 0; y <= kWallYSubdivs; ++y) {
@@ -525,19 +556,32 @@ std::unique_ptr<Mesh> ProceduralMeshes::createGear(
             const uint32_t v1 = baseIdx + y * 2 + 1;
             const uint32_t v2 = baseIdx + (y + 1) * 2 + 1;
             const uint32_t v3 = baseIdx + (y + 1) * 2;
-            addQuad(v0, v1, v2, v3);
+            addQuad(v0, v3, v2, v1);
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralMeshes::createGear(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t numTeeth,
+    float outerRadius,
+    float rootRadius,
+    float boreRadius,
+    float thickness,
+    uint32_t radialRings,
+    std::string_view name
+) {
+    const auto cpuMesh = createGear(numTeeth, outerRadius, rootRadius, boreRadius, thickness, radialRings, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // ============================================================================
 // E. Detailed Multi-Part Mechanical Turbine Rotor
 // ============================================================================
 std::unique_ptr<Mesh> ProceduralMeshes::createTurbine(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t numBlades,
     float hubRadius,
     float tipRadius,
@@ -665,11 +709,12 @@ std::unique_ptr<Mesh> ProceduralMeshes::createTurbine(
                     rz
                 );
 
+                const float normalSign = (c <= kChordPoints / 2) ? 1.0f : -1.0f;
                 const glm::vec3 bladeNorm = glm::normalize(glm::vec3(
                     -std::sin(bladeAngle) * std::cos(twistAngle),
                      std::cos(bladeAngle) * std::cos(twistAngle),
                      std::sin(twistAngle)
-                ));
+                )) * normalSign;
 
                 vertices.push_back(Vertex{
                     .position = bladePos,
@@ -687,7 +732,11 @@ std::unique_ptr<Mesh> ProceduralMeshes::createTurbine(
                 const uint32_t p1 = bladeVertexStart + (s + 1) * bladeStride + c;
                 const uint32_t p2 = bladeVertexStart + (s + 1) * bladeStride + (c + 1);
                 const uint32_t p3 = bladeVertexStart + s * bladeStride + (c + 1);
-                addQuad(p0, p1, p2, p3);
+                if (c < kChordPoints / 2) {
+                    addQuad(p0, p3, p2, p1);
+                } else {
+                    addQuad(p0, p1, p2, p3);
+                }
             }
         }
     }
@@ -719,7 +768,23 @@ std::unique_ptr<Mesh> ProceduralMeshes::createTurbine(
         addQuad(b0 + 1, b0 + 3, b1 + 3, b1 + 1);
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralMeshes::createTurbine(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t numBlades,
+    float hubRadius,
+    float tipRadius,
+    float hubLength,
+    float bladeTwistDeg,
+    uint32_t bladeSpanSegments,
+    uint32_t bladeChordSegments,
+    std::string_view name
+) {
+    const auto cpuMesh = createTurbine(numBlades, hubRadius, tipRadius, hubLength, bladeTwistDeg, bladeSpanSegments, bladeChordSegments, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 } // namespace sidera

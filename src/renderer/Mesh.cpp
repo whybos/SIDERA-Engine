@@ -123,9 +123,7 @@ void Mesh::drawInstanced(VkCommandBuffer cmd, uint32_t instanceCount, uint32_t f
     vkCmdDrawIndexed(cmd, m_indexCount, instanceCount, 0, 0, firstInstance);
 }
 
-std::unique_ptr<Mesh> Mesh::createCube(const VulkanDevice& device,
-                                       VkCommandPool transferCommandPool,
-                                       float h) {
+std::unique_ptr<Mesh> Mesh::createCube(float h) {
     std::vector<Vertex> vertices = {
         // Front face (+Z) - Coral Red
         {{-h, -h,  h}, {0.95f, 0.32f, 0.28f}, {0.0f, 1.0f}},
@@ -186,12 +184,17 @@ std::unique_ptr<Mesh> Mesh::createCube(const VulkanDevice& device,
         indices.push_back(base + 0);
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, "CubeMesh");
+    return std::make_unique<Mesh>(vertices, indices, "CubeMesh");
 }
 
-std::unique_ptr<Mesh> Mesh::createPyramid(const VulkanDevice& device,
-                                          VkCommandPool transferCommandPool,
-                                          float halfBase,
+std::unique_ptr<Mesh> Mesh::createCube(const VulkanDevice& device,
+                                       VkCommandPool transferCommandPool,
+                                       float h) {
+    const auto cpuMesh = createCube(h);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), "CubeMesh");
+}
+
+std::unique_ptr<Mesh> Mesh::createPyramid(float halfBase,
                                           float height) {
     const float yMin = -height * 0.5f;
     const float yMax =  height * 0.5f;
@@ -246,12 +249,18 @@ std::unique_ptr<Mesh> Mesh::createPyramid(const VulkanDevice& device,
         12, 13, 14, 14, 15, 12
     };
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, "PyramidMesh");
+    return std::make_unique<Mesh>(vertices, indices, "PyramidMesh");
 }
 
-std::unique_ptr<Mesh> Mesh::createGroundGrid(const VulkanDevice& device,
-                                             VkCommandPool transferCommandPool,
-                                             float halfExtent,
+std::unique_ptr<Mesh> Mesh::createPyramid(const VulkanDevice& device,
+                                          VkCommandPool transferCommandPool,
+                                          float halfBase,
+                                          float height) {
+    const auto cpuMesh = createPyramid(halfBase, height);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), "PyramidMesh");
+}
+
+std::unique_ptr<Mesh> Mesh::createGroundGrid(float halfExtent,
                                              uint32_t subdivisions) {
     if (subdivisions == 0) {
         subdivisions = 1;
@@ -275,10 +284,10 @@ std::unique_ptr<Mesh> Mesh::createGroundGrid(const VulkanDevice& device,
 
             const uint32_t base = static_cast<uint32_t>(vertices.size());
             // Counter-clockwise when viewed from +Y (above)
-            vertices.push_back({{x0, 0.0f, z1}, c0, {0.0f, 1.0f}});
-            vertices.push_back({{x1, 0.0f, z1}, c1, {1.0f, 1.0f}});
-            vertices.push_back({{x1, 0.0f, z0}, c0, {1.0f, 0.0f}});
-            vertices.push_back({{x0, 0.0f, z0}, c1, {0.0f, 0.0f}});
+            vertices.push_back({{x0, 0.0f, z1}, c0, {0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}});
+            vertices.push_back({{x1, 0.0f, z1}, c1, {1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}});
+            vertices.push_back({{x1, 0.0f, z0}, c0, {1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}});
+            vertices.push_back({{x0, 0.0f, z0}, c1, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}});
 
             indices.push_back(base + 0);
             indices.push_back(base + 1);
@@ -289,12 +298,18 @@ std::unique_ptr<Mesh> Mesh::createGroundGrid(const VulkanDevice& device,
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, "GroundGridMesh");
+    return std::make_unique<Mesh>(vertices, indices, "GroundGridMesh");
 }
 
-std::unique_ptr<Mesh> Mesh::createSphere(const VulkanDevice& device,
-                                         VkCommandPool transferCommandPool,
-                                         float radius,
+std::unique_ptr<Mesh> Mesh::createGroundGrid(const VulkanDevice& device,
+                                             VkCommandPool transferCommandPool,
+                                             float halfExtent,
+                                             uint32_t subdivisions) {
+    const auto cpuMesh = createGroundGrid(halfExtent, subdivisions);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), "GroundGridMesh");
+}
+
+std::unique_ptr<Mesh> Mesh::createSphere(float radius,
                                          uint32_t stacks,
                                          uint32_t slices) {
     stacks = std::max(stacks, 3u);
@@ -331,12 +346,30 @@ std::unique_ptr<Mesh> Mesh::createSphere(const VulkanDevice& device,
             const uint32_t b = (i + 1) * stride + j;
             const uint32_t c = (i + 1) * stride + j + 1;
             const uint32_t d = i * stride + j + 1;
-            // Counter-clockwise when viewed from outside
-            indices.insert(indices.end(), {a, c, b, a, d, c});
+
+            if (i == 0) {
+                // North polar cap (a == d at pole)
+                indices.insert(indices.end(), {a, c, b});
+            } else if (i == stacks - 1) {
+                // South polar cap (b == c at pole)
+                indices.insert(indices.end(), {a, d, c});
+            } else {
+                // Counter-clockwise quad when viewed from outside
+                indices.insert(indices.end(), {a, c, b, a, d, c});
+            }
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, "SphereMesh");
+    return std::make_unique<Mesh>(vertices, indices, "SphereMesh");
+}
+
+std::unique_ptr<Mesh> Mesh::createSphere(const VulkanDevice& device,
+                                         VkCommandPool transferCommandPool,
+                                         float radius,
+                                         uint32_t stacks,
+                                         uint32_t slices) {
+    const auto cpuMesh = createSphere(radius, stacks, slices);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), "SphereMesh");
 }
 
 

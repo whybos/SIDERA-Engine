@@ -23,7 +23,8 @@ enum class ViewportMode : uint32_t {
     UV = 11,              // L. UV: UV coordinates calibration grid
     Emissive = 12,        // M. Emissive: Emissive texture and material data
     ShadowDebug = 13,     // N. Shadow Debug: Cascaded shadow map split overlay / debug
-    Count = 14
+    FaceOrientation = 14, // O. Face Orientation: Front-facing (green) vs Back-facing (blue) / Inverted normals (red)
+    Count = 15
 };
 
 [[nodiscard]] constexpr const char* getViewportModeName(ViewportMode mode) noexcept {
@@ -42,6 +43,7 @@ enum class ViewportMode : uint32_t {
         case ViewportMode::UV:               return "UV Coordinates";
         case ViewportMode::Emissive:         return "Emissive";
         case ViewportMode::ShadowDebug:      return "Shadow Debug (CSM Cascades)";
+        case ViewportMode::FaceOrientation:  return "Face Orientation";
         default:                             return "Unknown";
     }
 }

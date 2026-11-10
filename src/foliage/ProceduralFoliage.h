@@ -14,6 +14,13 @@ class ProceduralFoliage {
 public:
     // Procedural Tree Trunk Mesh (Cylindrical tapered bark trunk, base at local Y = 0)
     [[nodiscard]] static std::unique_ptr<Mesh> createTreeTrunkMesh(
+        uint32_t lodTier = 0,
+        float trunkHeight = 4.0f,
+        float baseRadius = 0.28f,
+        float tipRadius = 0.12f,
+        std::string_view name = "TreeTrunk"
+    );
+    [[nodiscard]] static std::unique_ptr<Mesh> createTreeTrunkMesh(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
         uint32_t lodTier = 0,
@@ -24,6 +31,13 @@ public:
     );
 
     // Procedural Tree Canopy Mesh (Conical / multi-tier fir or pine canopy with outward leaf normals)
+    [[nodiscard]] static std::unique_ptr<Mesh> createTreeCanopyMesh(
+        uint32_t lodTier = 0,
+        float canopyBaseHeight = 1.8f,
+        float canopyTopHeight = 6.2f,
+        float maxRadius = 1.8f,
+        std::string_view name = "TreeCanopy"
+    );
     [[nodiscard]] static std::unique_ptr<Mesh> createTreeCanopyMesh(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
@@ -36,6 +50,12 @@ public:
 
     // Procedural Grass Clump Mesh (Intersecting curved, tapered grass blades rooted at Y = 0)
     [[nodiscard]] static std::unique_ptr<Mesh> createGrassClumpMesh(
+        uint32_t bladeCount = 7,
+        float clumpRadius = 0.45f,
+        float bladeHeight = 0.85f,
+        std::string_view name = "GrassClump"
+    );
+    [[nodiscard]] static std::unique_ptr<Mesh> createGrassClumpMesh(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
         uint32_t bladeCount = 7,
@@ -46,6 +66,12 @@ public:
 
     // Procedural Bush Mesh (Clustered foliage domes, base at Y = 0)
     [[nodiscard]] static std::unique_ptr<Mesh> createBushMesh(
+        uint32_t lodTier = 0,
+        float radius = 0.95f,
+        float height = 1.35f,
+        std::string_view name = "Bush"
+    );
+    [[nodiscard]] static std::unique_ptr<Mesh> createBushMesh(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,
         uint32_t lodTier = 0,
@@ -55,6 +81,11 @@ public:
     );
 
     // Procedural Fern Fronds Mesh (Radial arching ground fronds rooted at Y = 0)
+    [[nodiscard]] static std::unique_ptr<Mesh> createFernMesh(
+        uint32_t frondCount = 6,
+        float frondLength = 0.65f,
+        std::string_view name = "Fern"
+    );
     [[nodiscard]] static std::unique_ptr<Mesh> createFernMesh(
         const VulkanDevice& device,
         VkCommandPool transferCommandPool,

@@ -267,7 +267,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "  [GPU Instancing]   F12 = Cycle Instancing (Normal, 100, 1,000, 10,000 instances)");
     SIDERA_LOG_INFO("Core", "  [Level of Detail]  L = Cycle Forced LOD (Auto, Force LOD 0..3), K = Toggle Selection Mode (Dist/Screen)");
     SIDERA_LOG_INFO("Core", "  [Foliage System]   O = Toggle Foliage Rendering ON/OFF, P = Toggle Foliage Wind Animation ON/OFF");
-    SIDERA_LOG_INFO("Core", "  [Viewport Modes]   V = Cycle Viewport Rendering Mode (14 modes)");
+    SIDERA_LOG_INFO("Core", "  [Viewport Modes]   V = Cycle Viewport Rendering Mode (15 modes)");
     SIDERA_LOG_INFO("Core", "  [Normal Space]     B = Toggle Normal Space (World Space / View Space)");
     SIDERA_LOG_INFO("Core", "  [Viewport Layout]  T = Toggle Viewport Layout (Single / Split Horizontal Dual)");
     SIDERA_LOG_INFO("Core", "  [Exit]             ESC = Exit Application");

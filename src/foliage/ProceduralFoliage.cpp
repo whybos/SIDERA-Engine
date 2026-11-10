@@ -16,8 +16,6 @@ namespace sidera {
 // Procedural Tree Trunk Mesh (Cylindrical tapered trunk, root at local Y = 0)
 // =============================================================================
 std::unique_ptr<Mesh> ProceduralFoliage::createTreeTrunkMesh(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t lodTier,
     float trunkHeight,
     float baseRadius,
@@ -86,15 +84,26 @@ std::unique_ptr<Mesh> ProceduralFoliage::createTreeTrunkMesh(
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralFoliage::createTreeTrunkMesh(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t lodTier,
+    float trunkHeight,
+    float baseRadius,
+    float tipRadius,
+    std::string_view name
+) {
+    const auto cpuMesh = createTreeTrunkMesh(lodTier, trunkHeight, baseRadius, tipRadius, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // =============================================================================
 // Procedural Tree Canopy Mesh (Multi-tier conical / fir canopy with wind weights)
 // =============================================================================
 std::unique_ptr<Mesh> ProceduralFoliage::createTreeCanopyMesh(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t lodTier,
     float canopyBaseHeight,
     float canopyTopHeight,
@@ -158,8 +167,8 @@ std::unique_ptr<Mesh> ProceduralFoliage::createTreeCanopyMesh(
         // Conical tier side triangles
         for (uint32_t r = 0; r < radialSegments; ++r) {
             indices.push_back(tipVertexIdx);
-            indices.push_back(ringStartIdx + r);
             indices.push_back(ringStartIdx + r + 1);
+            indices.push_back(ringStartIdx + r);
         }
 
         // Bottom skirt under-cap for tier depth and self-shadowing
@@ -173,20 +182,31 @@ std::unique_ptr<Mesh> ProceduralFoliage::createTreeCanopyMesh(
 
         for (uint32_t r = 0; r < radialSegments; ++r) {
             indices.push_back(underCenterIdx);
-            indices.push_back(ringStartIdx + r + 1);
             indices.push_back(ringStartIdx + r);
+            indices.push_back(ringStartIdx + r + 1);
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralFoliage::createTreeCanopyMesh(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t lodTier,
+    float canopyBaseHeight,
+    float canopyTopHeight,
+    float maxRadius,
+    std::string_view name
+) {
+    const auto cpuMesh = createTreeCanopyMesh(lodTier, canopyBaseHeight, canopyTopHeight, maxRadius, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // =============================================================================
 // Procedural Grass Clump Mesh (Curved, tapered blades rooted at Y = 0)
 // =============================================================================
 std::unique_ptr<Mesh> ProceduralFoliage::createGrassClumpMesh(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t bladeCount,
     float clumpRadius,
     float bladeHeight,
@@ -281,15 +301,25 @@ std::unique_ptr<Mesh> ProceduralFoliage::createGrassClumpMesh(
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralFoliage::createGrassClumpMesh(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t bladeCount,
+    float clumpRadius,
+    float bladeHeight,
+    std::string_view name
+) {
+    const auto cpuMesh = createGrassClumpMesh(bladeCount, clumpRadius, bladeHeight, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // =============================================================================
 // Procedural Bush Mesh (Clustered foliage domes, base at Y = 0)
 // =============================================================================
 std::unique_ptr<Mesh> ProceduralFoliage::createBushMesh(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t lodTier,
     float radius,
     float height,
@@ -359,15 +389,25 @@ std::unique_ptr<Mesh> ProceduralFoliage::createBushMesh(
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralFoliage::createBushMesh(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t lodTier,
+    float radius,
+    float height,
+    std::string_view name
+) {
+    const auto cpuMesh = createBushMesh(lodTier, radius, height, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // =============================================================================
 // Procedural Fern Fronds Mesh (Radial arching ground fronds rooted at Y = 0)
 // =============================================================================
 std::unique_ptr<Mesh> ProceduralFoliage::createFernMesh(
-    const VulkanDevice& device,
-    VkCommandPool transferCommandPool,
     uint32_t frondCount,
     float frondLength,
     std::string_view name
@@ -439,7 +479,18 @@ std::unique_ptr<Mesh> ProceduralFoliage::createFernMesh(
         }
     }
 
-    return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    return std::make_unique<Mesh>(vertices, indices, name);
+}
+
+std::unique_ptr<Mesh> ProceduralFoliage::createFernMesh(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    uint32_t frondCount,
+    float frondLength,
+    std::string_view name
+) {
+    const auto cpuMesh = createFernMesh(frondCount, frondLength, name);
+    return std::make_unique<Mesh>(device, transferCommandPool, cpuMesh->getCpuVertices(), cpuMesh->getCpuIndices(), name);
 }
 
 // =============================================================================

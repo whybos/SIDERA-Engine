@@ -53,15 +53,22 @@ mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
     vec2 duv1 = dFdx(uv);
     vec2 duv2 = dFdy(uv);
 
-    vec3 dp2perp = cross(dp2, N);
-    vec3 dp1perp = cross(N, dp1);
+    // In Vulkan, screen Y increases downwards. Using cross(N, dp2) and cross(dp1, N)
+    // constructs a correct right-handed tangent frame where T points along +U and B points along +V.
+    vec3 dp2perp = cross(N, dp2);
+    vec3 dp1perp = cross(dp1, N);
     vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
     vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
 
-    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
-    if (isinf(invmax) || isnan(invmax)) {
-        return mat3(1.0);
+    float maxLenSq = max(dot(T, T), dot(B, B));
+    if (isinf(maxLenSq) || isnan(maxLenSq) || maxLenSq < 1e-10) {
+        // Safe robust fallback when UV derivatives are degenerate: construct orthonormal frame around N
+        vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 fallbackT = normalize(cross(up, N));
+        vec3 fallbackB = cross(N, fallbackT);
+        return mat3(fallbackT, fallbackB, N);
     }
+    float invmax = inversesqrt(maxLenSq);
     return mat3(T * invmax, B * invmax, N);
 }
 
@@ -374,6 +381,20 @@ void main() {
         vec3 shadowVis = mix(Lo + ambient, tint, 0.55);
         shadowVis = shadowVis / (shadowVis + vec3(1.0));
         outColor = vec4(shadowVis, 1.0);
+        return;
+    }
+
+    // Mode 14: Face Orientation (Front-facing vs Back-facing / Inverted normals)
+    if (mode == 14u) {
+        float NdotV = dot(N, V);
+        if (!gl_FrontFacing) {
+            outColor = vec4(0.15, 0.45, 0.95, 1.0); // Blue for back-facing primitives
+        } else if (NdotV < 0.0) {
+            outColor = vec4(0.95, 0.15, 0.15, 1.0); // Bright Red for inverted surface normals!
+        } else {
+            float shade = clamp(NdotV * 0.6 + 0.4, 0.0, 1.0);
+            outColor = vec4(vec3(0.15, 0.85, 0.35) * shade, 1.0); // Green for correct front-facing
+        }
         return;
     }
 
