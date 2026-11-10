@@ -1,8 +1,9 @@
 #version 450
 
-// GPU-driven variant of triangle.vert (Milestone 14).
-// Per-object transform and material come from the object SSBO, indexed by gl_InstanceIndex.
-// gl_InstanceIndex == firstInstance (written by gen_draw_commands.comp) + instance (always 0).
+// GPU-driven variant of triangle.vert with GPU Instancing (Milestone 16).
+// Per-object transform and material come from the object SSBO, indexed via visibleIndices.
+// gl_InstanceIndex == firstInstance (bInfo.firstInstance) + localInstanceIndex.
+// visibleIndices[gl_InstanceIndex] contains the global index into objects[].
 // Requires the drawIndirectFirstInstance device feature.
 
 layout(set = 0, binding = 0) uniform SceneUBO {
@@ -21,7 +22,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4 screenParams;
 } scene;
 
-// Must match GpuObjectData in src/renderer/GpuDrivenScene.h (std430, 112 bytes).
+// Must match GpuObjectData in src/renderer/GpuDrivenScene.h / InstanceData.h (std430, 160 bytes).
 struct GpuObjectData {
     mat4 model;
     vec4 albedoMetallic;
@@ -34,6 +35,10 @@ struct GpuObjectData {
 
 layout(std430, set = 0, binding = 6) readonly buffer ObjectBuffer {
     GpuObjectData objects[];
+};
+
+layout(std430, set = 0, binding = 8) readonly buffer VisibleIndicesBuffer {
+    uint visibleIndices[];
 };
 
 layout(location = 0) in vec3 inPosition;
@@ -49,11 +54,11 @@ layout(location = 4) flat out vec4 fragAlbedoMetallic;
 layout(location = 5) flat out vec4 fragRoughnessAoTex;
 
 void main() {
-    GpuObjectData obj = objects[gl_InstanceIndex];
+    uint objIndex = visibleIndices[gl_InstanceIndex];
+    GpuObjectData obj = objects[objIndex];
 
     vec4 world = obj.model * vec4(inPosition, 1.0);
     fragWorldPos = world.xyz;
-    // Same normal transform as the CPU-driven path (inverse-transpose of the model's 3x3)
     fragNormal = normalize(transpose(inverse(mat3(obj.model))) * inNormal);
     fragColor = inColor;
     fragUV = inUV;

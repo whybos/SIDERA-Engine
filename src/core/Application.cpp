@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.15.0";
+constexpr std::string_view kEngineVersion = "v0.16.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -35,6 +35,17 @@ Application::Application(const ApplicationConfig& config)
     m_limiterEnabled = m_config.targetFps > 0.0f;
     if (m_config.stressTest) {
         m_renderer.setStressTestMode(true);
+    }
+    if (m_config.instanceCount > 0) {
+        if (m_config.instanceCount == 100) {
+            m_renderer.setInstancingMode(Renderer::InstancingMode::Count100);
+        } else if (m_config.instanceCount == 1000) {
+            m_renderer.setInstancingMode(Renderer::InstancingMode::Count1000);
+        } else if (m_config.instanceCount == 10000) {
+            m_renderer.setInstancingMode(Renderer::InstancingMode::Count10000);
+        } else {
+            m_renderer.setInstancingMode(Renderer::InstancingMode::Custom, m_config.instanceCount);
+        }
     }
     if (m_config.cameraPos) {
         m_renderer.getCamera().setPosition(*m_config.cameraPos);
@@ -77,16 +88,26 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
     const RendererTimings timings = m_renderer.consumeTimings();
     const auto& cs = m_renderer.getLastCullingStats();
 
+    std::string instancingModeStr = "NORMAL";
+    switch (m_renderer.getInstancingMode()) {
+        case Renderer::InstancingMode::Count100: instancingModeStr = "100"; break;
+        case Renderer::InstancingMode::Count1000: instancingModeStr = "1K"; break;
+        case Renderer::InstancingMode::Count10000: instancingModeStr = "10K"; break;
+        case Renderer::InstancingMode::Custom: instancingModeStr = std::format("{}", m_renderer.getTotalInstanceCount()); break;
+        default: break;
+    }
+
     std::string drawsInfo;
     std::string cullingInfo;
     if (isGpu) {
-        drawsInfo = std::format("{} API draws [{} objs, vis {}, culled {}(F:{},O:{})] (+{} shd), {} tris",
+        drawsInfo = std::format("{} instanced draws [{} inst, vis {}, culled {}(F:{},O:{})] in {} batches (+{} shd), {} tris",
                                 m_renderer.getMainApiDrawCallCount(),
-                                m_renderer.getGpuObjectsProcessed(),
+                                m_renderer.getTotalInstanceCount(),
                                 cs.finalVisible,
                                 cs.frustumCulled + cs.occlusionCulled,
                                 cs.frustumCulled,
                                 cs.occlusionCulled,
+                                m_renderer.getInstanceBatchCount(),
                                 m_renderer.getShadowApiDrawCallCount(),
                                 m_renderer.getTriangleCount());
         cullingInfo = std::format(" | Culling: F:{} O:{}",
@@ -123,9 +144,9 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
 
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}",
         kEngineVersion,
-        isGpu ? "GPU-DRIVEN" : "CPU-DRIVEN",
+        isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
         m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
         r.avgMs,
@@ -136,7 +157,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         timingStr,
         m_renderer.isShadowsEnabled() ? std::format(" | {}", shadowInfo) : "",
         m_limiterEnabled ? "ON" : "OFF",
-        m_renderer.isStressTestMode() ? " | STRESS MODE" : ""
+        m_renderer.isStressTestMode() ? " | STRESS MODE" : "",
+        std::format(" | INSTANCING: {}", instancingModeStr)
     );
     m_window.setTitle(title);
 
@@ -152,7 +174,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -173,6 +195,7 @@ void Application::run() {
     bool f9WasDown = false;
     bool f10WasDown = false;
     bool f11WasDown = false;
+    bool f12WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -181,7 +204,7 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg
+        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
@@ -191,6 +214,7 @@ void Application::run() {
         const bool f9Down = m_window.isKeyPressed(GLFW_KEY_F9);
         const bool f10Down = m_window.isKeyPressed(GLFW_KEY_F10);
         const bool f11Down = m_window.isKeyPressed(GLFW_KEY_F11);
+        const bool f12Down = m_window.isKeyPressed(GLFW_KEY_F12);
 
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
@@ -249,6 +273,10 @@ void Application::run() {
             m_renderer.cycleCullingDebugMode();
             m_frameStats.reset();
         }
+        if (f12Down && !f12WasDown) {
+            m_renderer.cycleInstancingMode();
+            m_frameStats.reset();
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
@@ -258,6 +286,7 @@ void Application::run() {
         f9WasDown = f9Down;
         f10WasDown = f10Down;
         f11WasDown = f11Down;
+        f12WasDown = f12Down;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

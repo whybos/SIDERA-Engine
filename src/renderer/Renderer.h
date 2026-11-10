@@ -4,6 +4,7 @@
 #include "renderer/Frustum.h"
 #include "renderer/Camera.h"
 #include "renderer/GpuDrivenScene.h"
+#include "renderer/InstanceBatch.h"
 #include "renderer/Mesh.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
@@ -181,6 +182,22 @@ public:
     [[nodiscard]] const std::array<glm::mat4, 4>& getCascadeMatrices() const noexcept { return m_cascadeMatrices; }
     [[nodiscard]] const std::array<float, 4>& getCascadeSplits() const noexcept { return m_cascadeSplits; }
 
+    // GPU Instancing (Milestone 16)
+    enum class InstancingMode : uint32_t {
+        Normal = 0,
+        Count100 = 1,
+        Count1000 = 2,
+        Count10000 = 3,
+        Custom = 4
+    };
+
+    void setInstancingMode(InstancingMode mode, uint32_t customCount = 0);
+    void cycleInstancingMode();
+    [[nodiscard]] InstancingMode getInstancingMode() const noexcept { return m_instancingMode; }
+    [[nodiscard]] uint32_t getTotalInstanceCount() const noexcept { return m_batchManager.getTotalInstanceCount(); }
+    [[nodiscard]] uint32_t getInstanceBatchCount() const noexcept { return m_batchManager.getBatchCount(); }
+    void updateGpuDescriptors();
+
 private:
     void createCameraDescriptorResources();
     void updateShadowDescriptorSets();
@@ -302,6 +319,13 @@ private:
     std::unique_ptr<Mesh> m_torusKnotMesh;
     std::unique_ptr<Mesh> m_turbineMesh;
     std::vector<RenderObject> m_renderObjects;
+
+    // GPU Instancing (Milestone 16)
+    InstancingMode m_instancingMode = InstancingMode::Normal;
+    uint32_t m_customInstanceCount = 0;
+    InstanceBatchManager m_batchManager;
+    std::vector<GpuInstanceData> m_gpuInstances;
+    std::vector<GpuBatchInfo> m_gpuBatches;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

@@ -89,6 +89,10 @@ void Mesh::draw(VkCommandBuffer cmd) const noexcept {
     vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
 }
 
+void Mesh::drawInstanced(VkCommandBuffer cmd, uint32_t instanceCount, uint32_t firstInstance) const noexcept {
+    vkCmdDrawIndexed(cmd, m_indexCount, instanceCount, 0, 0, firstInstance);
+}
+
 std::unique_ptr<Mesh> Mesh::createCube(const VulkanDevice& device,
                                        VkCommandPool transferCommandPool,
                                        float h) {

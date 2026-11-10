@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.15.0
+    VERSION 0.16.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -206,6 +206,10 @@ set(SIDERA_SOURCES
     src/renderer/vulkan/VulkanHiZBuffer.cpp
     src/renderer/vulkan/VulkanShadowMap.h
     src/renderer/vulkan/VulkanShadowMap.cpp
+    src/renderer/Material.h
+    src/renderer/InstanceData.h
+    src/renderer/InstanceBatch.h
+    src/renderer/InstanceBatch.cpp
     src/renderer/GpuDrivenScene.h
     src/renderer/GpuDrivenScene.cpp
     src/renderer/vulkan/VulkanTexture.h

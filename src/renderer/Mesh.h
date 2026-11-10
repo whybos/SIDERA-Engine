@@ -41,6 +41,7 @@ public:
 
     void bind(VkCommandBuffer cmd) const noexcept;
     void draw(VkCommandBuffer cmd) const noexcept;
+    void drawInstanced(VkCommandBuffer cmd, uint32_t instanceCount, uint32_t firstInstance = 0) const noexcept;
 
     [[nodiscard]] uint32_t getVertexCount() const noexcept { return m_vertexCount; }
     [[nodiscard]] uint32_t getIndexCount() const noexcept { return m_indexCount; }

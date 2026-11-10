@@ -232,9 +232,32 @@ Renderer::~Renderer() {
 }
 
 void Renderer::updateScene(float deltaTime) noexcept {
-    for (auto& obj : m_renderObjects) {
-        if (obj.angularSpeed != 0.0f) {
-            obj.rotationRadians += obj.angularSpeed * deltaTime;
+    if (m_instancingMode == InstancingMode::Normal) {
+        for (auto& obj : m_renderObjects) {
+            if (obj.angularSpeed != 0.0f) {
+                obj.rotationRadians += obj.angularSpeed * deltaTime;
+            }
+        }
+        for (const auto& batch : m_batchManager.getBatches()) {
+            for (uint32_t idx = 0; idx < batch->getInstanceCount(); ++idx) {
+                const uint32_t objIdx = batch->getInstances()[idx].customId;
+                if (objIdx < m_renderObjects.size()) {
+                    batch->updateInstanceTransform(idx, m_renderObjects[objIdx].computeModelMatrix());
+                }
+            }
+        }
+    } else {
+        for (const auto& batch : m_batchManager.getBatches()) {
+            for (uint32_t idx = 0; idx < batch->getInstanceCount(); ++idx) {
+                auto& inst = batch->getInstances()[idx];
+                if (inst.angularSpeed != 0.0f) {
+                    inst.rotationRadians += inst.angularSpeed * deltaTime;
+                    glm::mat4 m(1.0f);
+                    m = glm::translate(m, inst.position);
+                    m = glm::rotate(m, inst.rotationRadians, inst.rotationAxis);
+                    batch->updateInstanceTransform(idx, m);
+                }
+            }
         }
     }
 }
@@ -368,7 +391,14 @@ void Renderer::createCameraDescriptorResources() {
     hizLayoutBinding.descriptorCount = 1;
     hizLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 8> bindings = {
+    // Binding 8: GPU-resident visible instance index buffer (GPU instancing)
+    VkDescriptorSetLayoutBinding visibleLayoutBinding{};
+    visibleLayoutBinding.binding = 8;
+    visibleLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    visibleLayoutBinding.descriptorCount = 1;
+    visibleLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    const std::array<VkDescriptorSetLayoutBinding, 9> bindings = {
         uboLayoutBinding,
         samplerLayoutBinding,
         irradianceLayoutBinding,
@@ -376,7 +406,8 @@ void Renderer::createCameraDescriptorResources() {
         brdfLutLayoutBinding,
         shadowLayoutBinding,
         objectLayoutBinding,
-        hizLayoutBinding
+        hizLayoutBinding,
+        visibleLayoutBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -392,7 +423,7 @@ void Renderer::createCameraDescriptorResources() {
     const std::array<VkDescriptorPoolSize, 3> poolSizes = {{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFramesInFlight},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 6},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFramesInFlight}
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFramesInFlight * 4}
     }};
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -518,23 +549,9 @@ void Renderer::createCameraDescriptorResources() {
         writes[6].pImageInfo = &hizInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-
-        if (m_gpuScene) {
-            VkDescriptorBufferInfo objectInfo{};
-            objectInfo.buffer = m_gpuScene->getObjectBuffer(i);
-            objectInfo.offset = 0;
-            objectInfo.range = m_gpuScene->getObjectBufferSize();
-
-            VkWriteDescriptorSet objectWrite{};
-            objectWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            objectWrite.dstSet = m_cameraDescriptorSets[i];
-            objectWrite.dstBinding = 6;
-            objectWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            objectWrite.descriptorCount = 1;
-            objectWrite.pBufferInfo = &objectInfo;
-            vkUpdateDescriptorSets(device, 1, &objectWrite, 0, nullptr);
-        }
     }
+
+    updateGpuDescriptors();
 
     SIDERA_LOG_INFO(
         "Renderer",
@@ -542,6 +559,41 @@ void Renderer::createCameraDescriptorResources() {
         kMaxFramesInFlight,
         uboSize
     );
+}
+
+void Renderer::updateGpuDescriptors() {
+    if (!m_gpuScene) {
+        return;
+    }
+    const VkDevice device = m_context.getDevice().getLogicalDevice();
+    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+        VkDescriptorBufferInfo objectInfo{};
+        objectInfo.buffer = m_gpuScene->getObjectBuffer(i);
+        objectInfo.offset = 0;
+        objectInfo.range = m_gpuScene->getObjectBufferSize();
+
+        VkDescriptorBufferInfo visibleInfo{};
+        visibleInfo.buffer = m_gpuScene->getVisibleIndicesBuffer(i);
+        visibleInfo.offset = 0;
+        visibleInfo.range = m_gpuScene->getVisibleIndicesBufferSize();
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_cameraDescriptorSets[i];
+        writes[0].dstBinding = 6;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &objectInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_cameraDescriptorSets[i];
+        writes[1].dstBinding = 8;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo = &visibleInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
 }
 
 void Renderer::updateShadowDescriptorSets() {
@@ -893,6 +945,9 @@ void Renderer::createGpuScene() {
 
     try {
         m_gpuScene = std::make_unique<GpuDrivenScene>(dev, kMaxFramesInFlight);
+        m_gpuScene->setOnBuffersReallocated([this]() {
+            updateGpuDescriptors();
+        });
     } catch (const std::exception& e) {
         SIDERA_LOG_ERROR("GpuDriven", "GPU-driven scene initialization failed: {}", e.what());
         m_gpuScene.reset();
@@ -957,14 +1012,9 @@ void Renderer::rebuildGpuScene() {
         return;
     }
 
-    std::vector<const Mesh*> meshes;
-    meshes.reserve(m_renderObjects.size());
-    for (const auto& obj : m_renderObjects) {
-        meshes.push_back(obj.mesh);
-    }
-
     try {
-        m_gpuScene->setScene(meshes);
+        m_gpuScene->setSceneBatches(m_batchManager);
+        updateGpuDescriptors();
         m_commandsGenerated = m_gpuScene->getCommandsGenerated();
     } catch (const std::exception& e) {
         // Callers guarantee the GPU is idle here, so the GPU-driven resources can be released.
@@ -975,25 +1025,44 @@ void Renderer::rebuildGpuScene() {
 }
 
 void Renderer::uploadGpuObjects(uint32_t frameIndex) {
-    const auto& slotToObject = m_gpuScene->getSlotToObject();
-    const auto& slotToBatch = m_gpuScene->getSlotToBatch();
+    m_batchManager.populateGpuData(m_gpuInstances, m_gpuBatches);
+    m_gpuScene->uploadInstances(frameIndex, m_gpuInstances);
+    m_gpuScene->resetMainCommands(frameIndex);
+}
 
-    m_gpuSlotData.resize(slotToObject.size());
-    for (size_t slot = 0; slot < slotToObject.size(); ++slot) {
-        const RenderObject& obj = m_renderObjects[slotToObject[slot]];
-        GpuObjectData& data = m_gpuSlotData[slot];
-        data.model = obj.computeModelMatrix();
-        data.albedoMetallic = glm::vec4(obj.albedo, obj.metallic);
-        data.roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f);
-        data.meshInfo = glm::uvec4(slotToBatch[slot], 1u, 0u, 0u);
-
-        const BoundingSphere sphere = obj.computeWorldBoundingSphere();
-        const AABB aabb = obj.computeWorldAABB();
-        data.boundingSphere = glm::vec4(sphere.center, sphere.radius);
-        data.aabbMin = glm::vec4(aabb.min, 0.0f);
-        data.aabbMax = glm::vec4(aabb.max, 0.0f);
+void Renderer::setInstancingMode(InstancingMode mode, uint32_t customCount) {
+    if (mode == m_instancingMode && (mode != InstancingMode::Custom || customCount == m_customInstanceCount)) {
+        return;
     }
-    m_gpuScene->uploadObjects(frameIndex, m_gpuSlotData);
+    m_context.waitIdle();
+    m_instancingMode = mode;
+    m_customInstanceCount = customCount;
+    destroySceneMeshes();
+    createSceneMeshes();
+
+    const char* modeName = "NORMAL";
+    switch (m_instancingMode) {
+        case InstancingMode::Count100: modeName = "100 INSTANCES"; break;
+        case InstancingMode::Count1000: modeName = "1,000 INSTANCES"; break;
+        case InstancingMode::Count10000: modeName = "10,000 INSTANCES"; break;
+        case InstancingMode::Custom: modeName = "CUSTOM INSTANCES"; break;
+        default: break;
+    }
+
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "Instancing mode set to: {} ({} total instances across {} batches, {} triangles).",
+        modeName,
+        getTotalInstanceCount(),
+        getInstanceBatchCount(),
+        getTriangleCount()
+    );
+}
+
+void Renderer::cycleInstancingMode() {
+    const uint32_t current = static_cast<uint32_t>(m_instancingMode);
+    const uint32_t next = (current + 1) % 4; // Cycles Normal -> 100 -> 1000 -> 10000 -> Normal
+    setInstancingMode(static_cast<InstancingMode>(next));
 }
 
 void Renderer::setRenderMode(RenderMode mode) {
@@ -1218,9 +1287,9 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
 
 uint32_t Renderer::getTriangleCount() const noexcept {
     uint32_t triangles = 0;
-    for (const auto& obj : m_renderObjects) {
-        if (obj.mesh) {
-            triangles += obj.mesh->getIndexCount() / 3;
+    for (const auto& batch : m_batchManager.getBatches()) {
+        if (batch && batch->getMesh()) {
+            triangles += batch->getInstanceCount() * (batch->getMesh()->getIndexCount() / 3);
         }
     }
     return triangles;
@@ -1531,12 +1600,116 @@ void Renderer::createSceneMeshes() {
         }
     }
 
+    // Populate batch manager from m_renderObjects for the Normal scene
+    for (size_t i = 0; i < m_renderObjects.size(); ++i) {
+        const auto& obj = m_renderObjects[i];
+        Material mat{
+            .albedo = obj.albedo,
+            .metallic = obj.metallic,
+            .roughness = obj.roughness,
+            .ao = obj.ao,
+            .textureStrength = obj.textureStrength
+        };
+        Instance inst{};
+        inst.transform = obj.computeModelMatrix();
+        inst.customId = static_cast<uint32_t>(i);
+        inst.angularSpeed = obj.angularSpeed;
+        inst.rotationAxis = obj.rotationAxis;
+        inst.rotationRadians = obj.rotationRadians;
+        m_batchManager.addInstance(obj.mesh, mat, inst);
+    }
+    m_batchManager.rebuildGlobalOffsets();
+
+    if (m_instancingMode != InstancingMode::Normal) {
+        m_renderObjects.clear();
+        m_batchManager.clear();
+
+        // 1. Add Ground Grid
+        Material groundMat{.albedo = {0.85f, 0.85f, 0.85f}, .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f};
+        glm::mat4 groundTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.60f, 0.0f));
+        m_batchManager.addInstance(m_groundMesh.get(), groundMat, groundTransform, 0);
+        m_renderObjects.push_back(RenderObject{
+            .mesh = m_groundMesh.get(),
+            .position = {0.0f, -0.60f, 0.0f},
+            .albedo = groundMat.albedo,
+            .metallic = groundMat.metallic,
+            .roughness = groundMat.roughness,
+            .ao = groundMat.ao,
+            .textureStrength = groundMat.textureStrength
+        });
+
+        uint32_t targetCount = 100;
+        if (m_instancingMode == InstancingMode::Count1000) targetCount = 1000;
+        else if (m_instancingMode == InstancingMode::Count10000) targetCount = 10000;
+        else if (m_instancingMode == InstancingMode::Custom) targetCount = (m_customInstanceCount == 0 ? 1 : m_customInstanceCount);
+
+        if (targetCount == 1) {
+            // Single instance verification
+            Material knotMat{.albedo = {0.96f, 0.96f, 0.98f}, .metallic = 1.0f, .roughness = 0.05f, .ao = 1.0f, .textureStrength = 0.0f};
+            glm::mat4 knotTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.80f, 0.0f));
+            m_batchManager.addInstance(m_torusKnotMesh.get(), knotMat, knotTransform, 1);
+            m_renderObjects.push_back(RenderObject{
+                .mesh = m_torusKnotMesh.get(),
+                .position = {0.0f, 0.80f, 0.0f},
+                .albedo = knotMat.albedo,
+                .metallic = knotMat.metallic,
+                .roughness = knotMat.roughness,
+                .ao = knotMat.ao,
+                .textureStrength = knotMat.textureStrength
+            });
+        } else {
+            // 4 high-performance PBR batches
+            const Material matTitanium{.albedo = {0.84f, 0.85f, 0.88f}, .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f, .textureStrength = 0.0f};
+            const Material matChrome{.albedo = {0.96f, 0.96f, 0.98f}, .metallic = 1.0f, .roughness = 0.04f, .ao = 1.0f, .textureStrength = 0.0f};
+            const Material matBrass{.albedo = {1.00f, 0.78f, 0.34f}, .metallic = 1.0f, .roughness = 0.15f, .ao = 1.0f, .textureStrength = 0.0f};
+            const Material matEmerald{.albedo = {0.06f, 0.75f, 0.35f}, .metallic = 0.0f, .roughness = 0.10f, .ao = 1.0f, .textureStrength = 0.0f};
+
+            const Mesh* meshes[4] = {m_turbineMesh.get(), m_torusKnotMesh.get(), m_gearMesh.get(), m_icosphereMesh.get()};
+            const Material mats[4] = {matTitanium, matChrome, matBrass, matEmerald};
+
+            const uint32_t perBatch = targetCount / 4;
+            for (uint32_t b = 0; b < 4; ++b) {
+                const uint32_t countThisBatch = (b == 3) ? (targetCount - 3 * perBatch) : perBatch;
+                if (targetCount <= 100) {
+                    const float r = 2.5f + 1.6f * static_cast<float>(b);
+                    const float y = 0.1f + 0.15f * static_cast<float>(b);
+                    m_batchManager.generateInstancedRing(meshes[b], mats[b], countThisBatch, r, y, 0.55f);
+                } else {
+                    const float extent = (targetCount >= 10000) ? 42.0f : 16.0f;
+                    const float y = 0.1f + 0.1f * static_cast<float>(b);
+                    m_batchManager.generateInstancedField(meshes[b], mats[b], countThisBatch, extent, y, (targetCount >= 10000) ? 0.35f : 0.50f);
+                }
+            }
+
+            // Sync with m_renderObjects for CPU mode testing (up to 2,000)
+            const uint32_t cpuLimit = std::min(targetCount, 2000u);
+            uint32_t added = 0;
+            for (const auto& bPtr : m_batchManager.getBatches()) {
+                if (bPtr->getMesh() == m_groundMesh.get()) continue;
+                for (const auto& inst : bPtr->getInstances()) {
+                    if (added++ >= cpuLimit) break;
+                    m_renderObjects.push_back(RenderObject{
+                        .mesh = bPtr->getMesh(),
+                        .position = inst.position,
+                        .scale = {1.0f, 1.0f, 1.0f},
+                        .albedo = bPtr->getMaterial().albedo,
+                        .metallic = bPtr->getMaterial().metallic,
+                        .roughness = bPtr->getMaterial().roughness,
+                        .ao = bPtr->getMaterial().ao,
+                        .textureStrength = bPtr->getMaterial().textureStrength
+                    });
+                }
+            }
+        }
+        m_batchManager.rebuildGlobalOffsets();
+    }
+
     SIDERA_LOG_INFO(
         "Renderer",
-        "Scene initialized ({} objects, {} visible triangles across {} draw calls).",
-        m_renderObjects.size(),
+        "Scene initialized ({} total instances, {} triangles across {} batches).",
+        getTotalInstanceCount(),
         getTriangleCount(),
-        getDrawCallCount()
+        getInstanceBatchCount()
     );
 
     rebuildGpuScene();

@@ -1,9 +1,10 @@
 #version 450
 
-// GPU-Driven Draw Command Generation & Visibility Culling (Milestone 15).
+// GPU-Driven Draw Command Generation, Instancing & Visibility Culling (Milestone 16).
 // Combines Gribb-Hartmann camera Frustum Culling (Sphere + AABB) and
 // conservative Hierarchical Depth (Hi-Z) Occlusion Culling.
-// Main pass commands are culled; shadow pass commands preserve all shadow casters.
+// Batches instances so each (Mesh, Material) group is drawn with ONE instanced draw command.
+// Main pass commands are culled & compacted; shadow pass commands preserve all shadow casters.
 
 layout(local_size_x = 64) in;
 
@@ -11,7 +12,7 @@ struct GpuObjectData {
     mat4 model;
     vec4 albedoMetallic;
     vec4 roughnessAoTex;
-    uvec4 meshInfo;          // x = mesh batch index, y = active flag
+    uvec4 meshInfo;          // x = batchId, y = active flag, z = instanceId, w = pad
     vec4 boundingSphere;     // xyz = world center, w = world radius
     vec4 aabbMin;            // xyz = world AABB min, w = unused
     vec4 aabbMax;            // xyz = world AABB max, w = unused
@@ -32,6 +33,13 @@ struct DrawIndexedIndirectCommand {
     uint firstInstance;
 };
 
+struct GpuBatchInfo {
+    uint meshIndex;
+    uint firstInstance;
+    uint instanceCount;
+    uint pad;
+};
+
 layout(std430, set = 0, binding = 0) readonly buffer ObjectBuffer {
     GpuObjectData objects[];
 };
@@ -40,11 +48,11 @@ layout(std430, set = 0, binding = 1) readonly buffer MeshInfoBuffer {
     MeshDrawInfo meshes[];
 };
 
-layout(std430, set = 0, binding = 2) writeonly buffer MainCommandBuffer {
+layout(std430, set = 0, binding = 2) buffer MainCommandBuffer {
     DrawIndexedIndirectCommand mainCommands[];
 };
 
-layout(std430, set = 0, binding = 3) writeonly buffer ShadowCommandBuffer {
+layout(std430, set = 0, binding = 3) buffer ShadowCommandBuffer {
     DrawIndexedIndirectCommand shadowCommands[];
 };
 
@@ -64,9 +72,17 @@ layout(std430, set = 0, binding = 5) buffer CullingStatsBuffer {
 
 layout(set = 0, binding = 6) uniform sampler2D uHiZMap;
 
+layout(std430, set = 0, binding = 7) writeonly buffer VisibleIndicesBuffer {
+    uint visibleIndices[];
+};
+
+layout(std430, set = 0, binding = 8) readonly buffer BatchInfoBuffer {
+    GpuBatchInfo batches[];
+};
+
 layout(push_constant) uniform PushConstants {
-    uint objectCount;
-    uint meshCount;
+    uint instanceCount;
+    uint batchCount;
     uint frustumCullingEnabled;
     uint occlusionCullingEnabled;
     uint hizValid;
@@ -75,145 +91,122 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
-    uint slot = gl_GlobalInvocationID.x;
-    if (slot >= pc.objectCount) {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.instanceCount) {
         return;
     }
 
-    GpuObjectData obj = objects[slot];
+    GpuObjectData obj = objects[idx];
     uvec4 info = obj.meshInfo;
+    uint batchId = info.x;
 
-    // Default culled command template
-    DrawIndexedIndirectCommand zeroCmd;
-    zeroCmd.indexCount    = 0u;
-    zeroCmd.instanceCount = 1u;
-    zeroCmd.firstIndex    = 0u;
-    zeroCmd.vertexOffset  = 0;
-    zeroCmd.firstInstance = slot;
-
-    if (info.y == 0u || info.x >= pc.meshCount) {
-        mainCommands[slot] = zeroCmd;
-        shadowCommands[slot] = zeroCmd;
+    if (info.y == 0u || batchId >= pc.batchCount) {
         return;
     }
 
-    MeshDrawInfo mesh = meshes[info.x];
+    GpuBatchInfo bInfo = batches[batchId];
 
-    // 1. Shadow Command: All active scene objects cast shadows without camera culling
-    // to prevent any shadow caster dropping off-camera (Section 7 safety).
-    DrawIndexedIndirectCommand shadowCmd;
-    shadowCmd.indexCount    = mesh.indexCount;
-    shadowCmd.instanceCount = 1u;
-    shadowCmd.firstIndex    = mesh.firstIndex;
-    shadowCmd.vertexOffset  = mesh.vertexOffset;
-    shadowCmd.firstInstance = slot;
-    shadowCommands[slot]    = shadowCmd;
-
-    // 2. Camera Visibility Evaluation for Main Scene Pass
+    // Visibility determination
     bool visible = true;
-    bool frustumCulled = false;
-    bool occlusionCulled = false;
 
-    // A. Frustum Culling
+    // 1. Camera Frustum Culling (Gribb-Hartmann normalized planes)
     if (pc.frustumCullingEnabled != 0u) {
-        // Fast Sphere rejection against all 6 planes
-        for (int i = 0; i < 6; ++i) {
-            float dist = dot(culling.frustumPlanes[i].xyz, obj.boundingSphere.xyz) + culling.frustumPlanes[i].w;
-            if (dist < -obj.boundingSphere.w) {
+        // Fast bounding sphere rejection test
+        vec3 sphereCenter = obj.boundingSphere.xyz;
+        float sphereRadius = obj.boundingSphere.w;
+        for (int p = 0; p < 6; ++p) {
+            vec3 n = culling.frustumPlanes[p].xyz;
+            float d = culling.frustumPlanes[p].w;
+            if (dot(n, sphereCenter) + d < -sphereRadius) {
                 visible = false;
-                frustumCulled = true;
                 break;
             }
         }
 
-        // Tighter AABB rejection if sphere intersected
+        // Conservative AABB test for surviving spheres
         if (visible) {
-            for (int i = 0; i < 6; ++i) {
-                vec3 n = culling.frustumPlanes[i].xyz;
+            vec3 bMin = obj.aabbMin.xyz;
+            vec3 bMax = obj.aabbMax.xyz;
+            for (int p = 0; p < 6; ++p) {
+                vec3 n = culling.frustumPlanes[p].xyz;
+                float d = culling.frustumPlanes[p].w;
                 vec3 pVertex = vec3(
-                    (n.x >= 0.0) ? obj.aabbMax.x : obj.aabbMin.x,
-                    (n.y >= 0.0) ? obj.aabbMax.y : obj.aabbMin.y,
-                    (n.z >= 0.0) ? obj.aabbMax.z : obj.aabbMin.z
+                    (n.x >= 0.0) ? bMax.x : bMin.x,
+                    (n.y >= 0.0) ? bMax.y : bMin.y,
+                    (n.z >= 0.0) ? bMax.z : bMin.z
                 );
-                if (dot(n, pVertex) + culling.frustumPlanes[i].w < 0.0) {
+                if (dot(n, pVertex) + d < 0.0) {
                     visible = false;
-                    frustumCulled = true;
                     break;
                 }
             }
         }
+
+        if (!visible) {
+            atomicAdd(stats.frustumCulled, 1);
+        }
     }
 
-    // B. Hi-Z Occlusion Culling
+    // 2. Hierarchical Depth (Hi-Z) Occlusion Culling
     if (visible && pc.occlusionCullingEnabled != 0u && pc.hizValid != 0u) {
-        // Near plane safeguard: do not occlude objects intersecting or close to the near plane
-        float nearDist = dot(culling.frustumPlanes[4].xyz, obj.boundingSphere.xyz) + culling.frustumPlanes[4].w;
-        if (nearDist > (obj.boundingSphere.w + 0.15)) {
-            vec3 corners[8];
-            corners[0] = vec3(obj.aabbMin.x, obj.aabbMin.y, obj.aabbMin.z);
-            corners[1] = vec3(obj.aabbMax.x, obj.aabbMin.y, obj.aabbMin.z);
-            corners[2] = vec3(obj.aabbMin.x, obj.aabbMax.y, obj.aabbMin.z);
-            corners[3] = vec3(obj.aabbMax.x, obj.aabbMax.y, obj.aabbMin.z);
-            corners[4] = vec3(obj.aabbMin.x, obj.aabbMin.y, obj.aabbMax.z);
-            corners[5] = vec3(obj.aabbMax.x, obj.aabbMin.y, obj.aabbMax.z);
-            corners[6] = vec3(obj.aabbMin.x, obj.aabbMax.y, obj.aabbMax.z);
-            corners[7] = vec3(obj.aabbMax.x, obj.aabbMax.y, obj.aabbMax.z);
+        vec3 bMin = obj.aabbMin.xyz;
+        vec3 bMax = obj.aabbMax.xyz;
 
-            vec3 minNdc = vec3(1.0, 1.0, 1.0);
-            vec3 maxNdc = vec3(-1.0, -1.0, 0.0);
-            bool anyBehind = false;
+        vec3 corners[8] = vec3[8](
+            vec3(bMin.x, bMin.y, bMin.z),
+            vec3(bMax.x, bMin.y, bMin.z),
+            vec3(bMin.x, bMax.y, bMin.z),
+            vec3(bMax.x, bMax.y, bMin.z),
+            vec3(bMin.x, bMin.y, bMax.z),
+            vec3(bMax.x, bMin.y, bMax.z),
+            vec3(bMin.x, bMax.y, bMax.z),
+            vec3(bMax.x, bMax.y, bMax.z)
+        );
 
-            for (int i = 0; i < 8; ++i) {
-                vec4 clip = culling.prevViewProj * vec4(corners[i], 1.0);
-                if (clip.w <= 0.001) {
-                    anyBehind = true;
-                    break;
-                }
-                vec3 ndc = clip.xyz / clip.w;
-                minNdc = min(minNdc, ndc);
-                maxNdc = max(maxNdc, ndc);
+        vec2 minClip = vec2(1.0);
+        vec2 maxClip = vec2(-1.0);
+        float minZ = 1.0;
+        bool behindCamera = false;
+
+        for (int i = 0; i < 8; ++i) {
+            vec4 clip = culling.prevViewProj * vec4(corners[i], 1.0);
+            if (clip.w <= 0.001) {
+                behindCamera = true;
+                break;
             }
+            vec3 ndc = clip.xyz / clip.w;
+            vec2 uv = ndc.xy * 0.5 + 0.5;
+            minClip = min(minClip, uv);
+            maxClip = max(maxClip, uv);
+            minZ = min(minZ, ndc.z);
+        }
 
-            if (!anyBehind) {
-                vec2 minUV = clamp(minNdc.xy * 0.5 + 0.5, 0.0, 1.0);
-                vec2 maxUV = clamp(maxNdc.xy * 0.5 + 0.5, 0.0, 1.0);
-                float closestDepth = clamp(minNdc.z, 0.0, 1.0);
+        if (!behindCamera && minZ > 0.0 && minZ < 1.0) {
+            vec2 boxSize = clamp(maxClip - minClip, vec2(0.0), vec2(1.0)) * pc.hizSize;
+            float maxDim = max(boxSize.x, boxSize.y);
+            float lod = clamp(ceil(log2(max(maxDim, 1.0))), 0.0, float(pc.hizMipLevels - 1));
 
-                vec2 sizeInTexels = (maxUV - minUV) * pc.hizSize;
-                float maxDim = max(sizeInTexels.x, sizeInTexels.y);
-                float mip = clamp(floor(log2(max(maxDim, 1.0))), 0.0, float(pc.hizMipLevels - 1));
+            vec2 uv0 = clamp(minClip, vec2(0.0), vec2(1.0));
+            vec2 uv1 = clamp(maxClip, vec2(0.0), vec2(1.0));
 
-                // Sample Hi-Z depth at the bounding box footprint corners
-                float d00 = textureLod(uHiZMap, vec2(minUV.x, minUV.y), mip).r;
-                float d10 = textureLod(uHiZMap, vec2(maxUV.x, minUV.y), mip).r;
-                float d01 = textureLod(uHiZMap, vec2(minUV.x, maxUV.y), mip).r;
-                float d11 = textureLod(uHiZMap, vec2(maxUV.x, maxUV.y), mip).r;
-                float maxOccluderDepth = max(max(d00, d10), max(d01, d11));
+            float d0 = textureLod(uHiZMap, uv0, lod).r;
+            float d1 = textureLod(uHiZMap, vec2(uv1.x, uv0.y), lod).r;
+            float d2 = textureLod(uHiZMap, vec2(uv0.x, uv1.y), lod).r;
+            float d3 = textureLod(uHiZMap, uv1, lod).r;
 
-                // Conservative depth bias prevents false occlusion from self-shadowing or precision limits
-                if (closestDepth > (maxOccluderDepth + 0.0008)) {
-                    visible = false;
-                    occlusionCulled = true;
-                }
+            float maxDepth = max(max(d0, d1), max(d2, d3));
+            const float kDepthBias = 0.0005;
+            if ((minZ - kDepthBias) > maxDepth) {
+                visible = false;
+                atomicAdd(stats.occlusionCulled, 1);
             }
         }
     }
 
-    // C. Statistics Gathering
-    if (frustumCulled) {
-        atomicAdd(stats.frustumCulled, 1u);
-    } else if (occlusionCulled) {
-        atomicAdd(stats.occlusionCulled, 1u);
-    } else {
-        atomicAdd(stats.finalVisible, 1u);
+    // 3. Compact visible instance into the batch's draw command
+    if (visible) {
+        uint localIdx = atomicAdd(mainCommands[batchId].instanceCount, 1);
+        visibleIndices[bInfo.firstInstance + localIdx] = idx;
+        atomicAdd(stats.finalVisible, 1);
     }
-
-    // D. Output Main Pass Indirect Command
-    DrawIndexedIndirectCommand mainCmd;
-    mainCmd.indexCount    = visible ? mesh.indexCount : 0u;
-    mainCmd.instanceCount = 1u;
-    mainCmd.firstIndex    = mesh.firstIndex;
-    mainCmd.vertexOffset  = mesh.vertexOffset;
-    mainCmd.firstInstance = slot;
-    mainCommands[slot]    = mainCmd;
 }

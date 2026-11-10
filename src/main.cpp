@@ -69,11 +69,13 @@ int main(int argc, char* argv[]) {
             config.occlusionCulling = false;
         } else if (arg == "--show-hiz") {
             config.showHiZ = true;
+        } else if ((arg == "--instances" || arg == "--instance-count") && i + 1 < argc) {
+            config.instanceCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.15.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.16.0 (Milestone 16: GPU Instancing)...");
         {
             sidera::Application app(config);
             app.run();
