@@ -197,6 +197,20 @@ Application::~Application() {
 }
 
 void Application::run() {
+    SIDERA_LOG_INFO("Core", "================================================================================");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.17.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
+    SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
+    SIDERA_LOG_INFO("Core", "  [Performance]      F4 = 60 FPS Limiter, F5 = High-Poly Stress Test");
+    SIDERA_LOG_INFO("Core", "  [Shadows]          F6 = Shadows ON/OFF, F7 = Shadow Debug Overlay");
+    SIDERA_LOG_INFO("Core", "  [Rendering Mode]   F8 = Toggle GPU-Driven Indirect / CPU Direct Submission");
+    SIDERA_LOG_INFO("Core", "  [Culling System]   F9 = Toggle Frustum Culling, F10 = Toggle Occlusion Culling, F11 = Hi-Z Depth View");
+    SIDERA_LOG_INFO("Core", "  [GPU Instancing]   F12 = Cycle Instancing (Normal, 100, 1,000, 10,000 instances)");
+    SIDERA_LOG_INFO("Core", "  [Viewport Modes]   V = Cycle Viewport Rendering Mode (14 modes)");
+    SIDERA_LOG_INFO("Core", "  [Normal Space]     B = Toggle Normal Space (World Space / View Space)");
+    SIDERA_LOG_INFO("Core", "  [Viewport Layout]  T = Toggle Viewport Layout (Single / Split Horizontal Dual)");
+    SIDERA_LOG_INFO("Core", "  [Exit]             ESC = Exit Application");
+    SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
         "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
