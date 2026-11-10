@@ -101,6 +101,10 @@ struct Frustum {
         return true;
     }
 
+    [[nodiscard]] bool intersectsAABB(const AABB& aabb) const noexcept {
+        return intersectsAABB(aabb.min, aabb.max);
+    }
+
     [[nodiscard]] bool intersects(const BoundingSphere& sphere, const AABB& aabb) const noexcept {
         // Fast sphere rejection first, then tighter AABB rejection
         if (!intersectsSphere(sphere.center, sphere.radius)) {

@@ -266,6 +266,19 @@ void Renderer::updateScene(float deltaTime) noexcept {
             }
         }
     }
+
+    // Update Terrain visibility via camera frustum culling (Milestone 18)
+    if (m_terrain && m_terrainEnabled) {
+        if (m_frustumCullingEnabled) {
+            const glm::mat4 vp = m_camera.getProjectionMatrix() * m_camera.getViewMatrix();
+            const Frustum camFrustum = Frustum::fromViewProj(vp);
+            m_terrain->updateVisibility(camFrustum);
+        } else {
+            for (const auto& chunk : m_terrain->getChunks()) {
+                chunk->setVisible(true);
+            }
+        }
+    }
 }
 
 void Renderer::drawFrame(Window& window) {
@@ -1408,6 +1421,9 @@ uint64_t Renderer::getTriangleCount() const noexcept {
             triangles += instances * meshTriangles;
         }
     }
+    if (m_terrain && m_terrainEnabled) {
+        triangles += m_terrain->getStats().visibleTriangles;
+    }
     return triangles;
 }
 
@@ -1538,6 +1554,29 @@ void Renderer::createSceneMeshes() {
     }
 
     SIDERA_LOG_INFO("Renderer", "[StressTest] New meshes created (mode: {}).", m_stressTestMode ? "STRESS TEST" : "NORMAL");
+
+    // -----------------------------------------------------------------
+    // TERRAIN RENDERING SYSTEM (Milestone 18)
+    // -----------------------------------------------------------------
+    m_terrain = std::make_unique<Terrain>();
+    TerrainConfig terrainConfig;
+    terrainConfig.width = 120.0f;
+    terrainConfig.length = 120.0f;
+    terrainConfig.heightScale = 14.0f;
+    terrainConfig.heightOffset = -2.2f;
+    terrainConfig.chunksX = 4;
+    terrainConfig.chunksZ = 4;
+    terrainConfig.chunkResolution = 48;
+    terrainConfig.textureTiling = 24.0f;
+    m_terrain->init(terrainConfig, dev, pool, *m_textureManager);
+
+    m_terrainRenderer = std::make_unique<TerrainRenderer>(
+        dev,
+        m_swapchain->getImageFormat(),
+        m_depthBuffer->format(),
+        m_cameraDescriptorSetLayout
+    );
+    m_terrainRenderer->updateMaterialDescriptors(*m_terrain);
 
     // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT
@@ -1847,6 +1886,12 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    if (m_terrain) {
+        m_terrain->destroy();
+    }
+    m_terrain.reset();
+    m_terrainRenderer.reset();
+
     m_renderObjects.clear();
     m_batchManager.clear();
     m_gpuInstances.clear();
@@ -1977,6 +2022,14 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd) {
                 ++m_shadowDrawCalls;
                 ++m_shadowApiDrawCalls;
             }
+        }
+
+        // Render terrain chunks into the shadow cascade (Milestone 18)
+        if (m_terrain && m_terrainEnabled && m_shadowPipeline != VK_NULL_HANDLE) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
+            const uint32_t tCalls = m_terrain->renderShadow(cmd, m_shadowPipelineLayout, m_cascadeMatrices[cascadeIdx]);
+            m_shadowDrawCalls += tCalls;
+            m_shadowApiDrawCalls += tCalls;
         }
 
         vkCmdEndRendering(cmd);
@@ -2189,6 +2242,21 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 obj.mesh->draw(cmd);
                 ++m_mainApiDrawCalls;
             }
+        }
+
+        // -------------------------------------------------------------
+        // Draw Terrain (Milestone 18)
+        // -------------------------------------------------------------
+        if (m_terrain && m_terrainEnabled && m_terrainRenderer) {
+            m_terrainRenderer->recordDraw(
+                cmd,
+                *m_terrain,
+                m_cameraDescriptorSets[m_currentFrame],
+                vp,
+                m_camera.getNearPlane(),
+                m_camera.getFarPlane()
+            );
+            m_mainApiDrawCalls += m_terrain->getStats().mainDrawCalls;
         }
     }
 

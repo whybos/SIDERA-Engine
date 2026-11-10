@@ -18,6 +18,8 @@
 #include "renderer/TextureManager.h"
 #include "renderer/ViewportManager.h"
 #include "renderer/IBLBuilder.h"
+#include "terrain/Terrain.h"
+#include "terrain/TerrainRenderer.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -212,6 +214,13 @@ public:
     [[nodiscard]] TextureManager& getTextureManager() noexcept { return *m_textureManager; }
     [[nodiscard]] const TextureManager& getTextureManager() const noexcept { return *m_textureManager; }
 
+    // Terrain Rendering (Milestone 18)
+    [[nodiscard]] Terrain* getTerrain() noexcept { return m_terrain.get(); }
+    [[nodiscard]] const Terrain* getTerrain() const noexcept { return m_terrain.get(); }
+    [[nodiscard]] bool isTerrainEnabled() const noexcept { return m_terrainEnabled; }
+    void setTerrainEnabled(bool enabled) noexcept { m_terrainEnabled = enabled; }
+    void toggleTerrain() noexcept { m_terrainEnabled = !m_terrainEnabled; }
+
 private:
     void createCameraDescriptorResources();
     void updateShadowDescriptorSets();
@@ -344,6 +353,11 @@ private:
     InstanceBatchManager m_batchManager;
     std::vector<GpuInstanceData> m_gpuInstances;
     std::vector<GpuBatchInfo> m_gpuBatches;
+
+    // Terrain Rendering (Milestone 18)
+    bool m_terrainEnabled = true;
+    std::unique_ptr<Terrain> m_terrain;
+    std::unique_ptr<TerrainRenderer> m_terrainRenderer;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

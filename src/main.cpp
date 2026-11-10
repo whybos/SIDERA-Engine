@@ -103,11 +103,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--normal-space" && i + 1 < argc) {
             const std::string_view space(argv[++i]);
             config.normalSpace = (space == "view" || space == "viewspace") ? 1 : 0;
+        } else if (arg == "--no-terrain") {
+            config.terrainEnabled = false;
+        } else if (arg == "--terrain") {
+            config.terrainEnabled = true;
+        } else if (arg == "--heightmap" && i + 1 < argc) {
+            config.heightmapPath = argv[++i];
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.17.0 (Milestone 17: Advanced Texture System & Viewport Modes)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.18.0 (Milestone 18: Terrain Rendering)...");
         {
             sidera::Application app(config);
             app.run();

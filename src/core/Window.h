@@ -12,7 +12,7 @@ namespace sidera {
 struct WindowConfig {
     uint32_t width = 1920;
     uint32_t height = 1080;
-    std::string title = "SIDERA Engine v0.17.0 - Advanced Texture System & Viewport Modes";
+    std::string title = "SIDERA Engine v0.18.0 - Terrain Rendering";
     bool resizable = true;
 };
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.17.0
+    VERSION 0.18.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -133,6 +133,9 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_convolution.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_cubemap.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/brdf_lut.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/terrain.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/terrain.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/terrain_shadow.vert
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -235,6 +238,18 @@ set(SIDERA_SOURCES
     src/renderer/vulkan/VulkanBuffer.cpp
     src/renderer/vulkan/GraphicsPipeline.h
     src/renderer/vulkan/GraphicsPipeline.cpp
+    src/terrain/TerrainBounds.h
+    src/terrain/TerrainConfig.h
+    src/terrain/HeightmapData.h
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainChunk.h
+    src/terrain/TerrainChunk.cpp
+    src/terrain/TerrainMaterial.h
+    src/terrain/TerrainMaterial.cpp
+    src/terrain/Terrain.h
+    src/terrain/Terrain.cpp
+    src/terrain/TerrainRenderer.h
+    src/terrain/TerrainRenderer.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -271,6 +286,59 @@ else()
 endif()
 
 target_link_libraries(sidera
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# ------------------------------------------------------------------------------
+# Milestone 18 Terrain Unit Tests
+# ------------------------------------------------------------------------------
+add_executable(test_terrain
+    tests/test_terrain.cpp
+    tests/stb_image_impl.cpp
+    src/terrain/HeightmapData.h
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainBounds.h
+    src/terrain/TerrainConfig.h
+    src/core/Log.h
+    src/core/Log.cpp
+    src/renderer/TextureManager.h
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/SamplerManager.h
+    src/renderer/vulkan/SamplerManager.cpp
+    src/renderer/vulkan/VulkanTexture.h
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.h
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/VulkanBuffer.h
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.h
+    src/renderer/vulkan/VulkanDevice.cpp
+)
+
+target_include_directories(test_terrain
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_terrain
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_terrain PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_terrain PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_terrain PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_terrain
     PRIVATE
         Vulkan::Vulkan
         glfw

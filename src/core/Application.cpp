@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.17.0";
+constexpr std::string_view kEngineVersion = "v0.18.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -28,6 +28,7 @@ Application::Application(const ApplicationConfig& config)
     m_renderer.setCascadeLambda(m_config.cascadeLambda);
     m_renderer.setFrustumCullingEnabled(m_config.frustumCulling);
     m_renderer.setOcclusionCullingEnabled(m_config.occlusionCulling);
+    m_renderer.setTerrainEnabled(m_config.terrainEnabled);
     if (m_config.showHiZ) {
         m_renderer.setCullingDebugMode(1);
     }
@@ -155,15 +156,25 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
     const auto& activeVp = vpMgr.getActiveViewport();
     const auto texStats = m_renderer.getTextureManager().getStats();
 
+    std::string terrainInfo;
+    if (m_renderer.getTerrain() && m_renderer.isTerrainEnabled()) {
+        const auto& tStats = m_renderer.getTerrain()->getStats();
+        terrainInfo = std::format(" | TERRAIN: {}/{} chunks, {} tris",
+                                  tStats.visibleChunks, tStats.totalChunks, tStats.visibleTriangles);
+    } else {
+        terrainInfo = " | TERRAIN: OFF";
+    }
+
     const std::string vpInfo = std::format(
-        " | VIEWPORT: {} ({}{}) | TEXTURES: {} (mips {}, {:.2f} MB, {} hits)",
+        " | VIEWPORT: {} ({}{}) | TEXTURES: {} (mips {}, {:.2f} MB, {} hits){}",
         getViewportModeName(activeVp.mode),
         getViewportLayoutName(vpMgr.getLayout()),
         activeVp.mode == ViewportMode::Normals ? (activeVp.normalSpace == 0 ? ", WORLD" : ", VIEW") : "",
         texStats.totalTextures,
         texStats.totalMipLevels,
         static_cast<double>(texStats.gpuMemoryUsageBytes) / (1024.0 * 1024.0),
-        texStats.cacheHits
+        texStats.cacheHits,
+        terrainInfo
     );
 
     const std::string title = std::format(
@@ -198,8 +209,9 @@ Application::~Application() {
 
 void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
-    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.17.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.18.0 — Runtime Controls Guide:");
     SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
+    SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
     SIDERA_LOG_INFO("Core", "  [Performance]      F4 = 60 FPS Limiter, F5 = High-Poly Stress Test");
     SIDERA_LOG_INFO("Core", "  [Shadows]          F6 = Shadows ON/OFF, F7 = Shadow Debug Overlay");
@@ -213,7 +225,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -227,6 +239,7 @@ void Application::run() {
     bool testedResizeStep2 = false;
     bool testedViewportModes = false;
     bool testedStressToggling = false;
+    bool f2WasDown = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
     bool f5WasDown = false;
@@ -248,7 +261,8 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, V: Viewport mode, B: Normal space, T: Split view
+        // F2: terrain, F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, V: Viewport mode, B: Normal space, T: Split view
+        const bool f2Down = m_window.isKeyPressed(GLFW_KEY_F2);
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
@@ -263,6 +277,11 @@ void Application::run() {
         const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
 
+        if (f2Down && !f2WasDown) {
+            m_renderer.toggleTerrain();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Terrain rendering toggled: {}.", m_renderer.isTerrainEnabled() ? "ENABLED" : "DISABLED");
+        }
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
             m_frameStats.reset();
@@ -336,6 +355,7 @@ void Application::run() {
             m_renderer.toggleSplitView();
             m_frameStats.reset();
         }
+        f2WasDown = f2Down;
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
@@ -441,7 +461,9 @@ void Application::run() {
                 m_renderer.setViewportMode(ViewportMode::Lit);
             } else if (!testedStressToggling && elapsed >= std::chrono::milliseconds(2200)) {
                 testedStressToggling = true;
-                SIDERA_LOG_INFO("Core", "[SmokeTest] Dynamically toggling stress test mode (Normal -> Stress -> Normal)...");
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Dynamically toggling stress test & terrain...");
+                m_renderer.toggleTerrain(); // OFF
+                m_renderer.toggleTerrain(); // ON
                 m_renderer.toggleStressTestMode(); // ON
                 m_renderer.toggleStressTestMode(); // OFF
                 m_renderer.toggleStressTestMode(); // ON

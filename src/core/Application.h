@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.17.0 - Advanced Texture System & Viewport Modes",
+        .title = "SIDERA Engine v0.18.0 - Terrain Rendering",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -26,6 +26,8 @@ struct ApplicationConfig {
     bool startWithStats = false;   // --stats: begin with the F3 overlay enabled
     float targetFps = 60.0f;       // frame limiter target (<= 0 disables); F4 toggles at runtime
     bool stressTest = false;       // --stress-test: high-poly stress scene (>= 1M triangles)
+    bool terrainEnabled = true;    // --terrain / --no-terrain
+    std::string heightmapPath = ""; // --heightmap <path>
     bool shadowsEnabled = true;    // --shadows on/off: directional shadow mapping
     uint32_t shadowResolution = 2048; // --shadow-resolution 1024/2048/4096
     uint32_t cascadeCount = 4;     // --cascade-count 3/4
