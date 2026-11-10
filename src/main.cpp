@@ -109,11 +109,37 @@ int main(int argc, char* argv[]) {
             config.terrainEnabled = true;
         } else if (arg == "--heightmap" && i + 1 < argc) {
             config.heightmapPath = argv[++i];
+        } else if (arg == "--lod") {
+            config.lodEnabled = true;
+        } else if (arg == "--no-lod") {
+            config.lodEnabled = false;
+        } else if (arg == "--lod-mode" && i + 1 < argc) {
+            const std::string_view mode(argv[++i]);
+            if (mode == "screen" || mode == "screenspace" || mode == "screen-space") {
+                config.lodMode = sidera::LODSelectionMode::ScreenSpace;
+            } else {
+                config.lodMode = sidera::LODSelectionMode::Distance;
+            }
+        } else if (arg == "--force-lod" && i + 1 < argc) {
+            const std::string_view forced(argv[++i]);
+            if (forced == "0" || forced == "lod0" || forced == "LOD0") {
+                config.forceLod = sidera::ForcedLODMode::ForceLOD0;
+            } else if (forced == "1" || forced == "lod1" || forced == "LOD1") {
+                config.forceLod = sidera::ForcedLODMode::ForceLOD1;
+            } else if (forced == "2" || forced == "lod2" || forced == "LOD2") {
+                config.forceLod = sidera::ForcedLODMode::ForceLOD2;
+            } else if (forced == "3" || forced == "lod3" || forced == "LOD3") {
+                config.forceLod = sidera::ForcedLODMode::ForceLOD3;
+            } else {
+                config.forceLod = sidera::ForcedLODMode::Auto;
+            }
+        } else if (arg == "--lod-hysteresis" && i + 1 < argc) {
+            config.lodHysteresis = std::strtof(argv[++i], nullptr);
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.18.0 (Milestone 18: Terrain Rendering)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.19.0 (Milestone 19: Level of Detail System)...");
         {
             sidera::Application app(config);
             app.run();

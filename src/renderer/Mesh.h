@@ -49,6 +49,16 @@ public:
     [[nodiscard]] std::string_view getName() const noexcept { return m_name; }
     [[nodiscard]] const AABB& getLocalAABB() const noexcept { return m_localAabb; }
     [[nodiscard]] const BoundingSphere& getLocalBoundingSphere() const noexcept { return m_localSphere; }
+    [[nodiscard]] const std::vector<Vertex>& getCpuVertices() const noexcept { return m_cpuVertices; }
+    [[nodiscard]] const std::vector<uint32_t>& getCpuIndices() const noexcept { return m_cpuIndices; }
+
+    // Generates a reduced Level of Detail (LOD) mesh using Quadric Error Metrics (QEM) simplification
+    [[nodiscard]] std::unique_ptr<Mesh> createSimplifiedLOD(
+        const VulkanDevice& device,
+        VkCommandPool transferCommandPool,
+        float targetRatio,
+        std::string_view name = ""
+    ) const;
 
     [[nodiscard]] static std::unique_ptr<Mesh> createCube(
         const VulkanDevice& device,
@@ -82,6 +92,8 @@ private:
     std::string m_name;
     std::unique_ptr<VulkanBuffer> m_vertexBuffer;
     std::unique_ptr<VulkanBuffer> m_indexBuffer;
+    std::vector<Vertex> m_cpuVertices;
+    std::vector<uint32_t> m_cpuIndices;
     uint32_t m_vertexCount = 0;
     uint32_t m_indexCount = 0;
     AABB m_localAabb{};

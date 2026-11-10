@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.18.0
+    VERSION 0.19.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -250,6 +250,15 @@ set(SIDERA_SOURCES
     src/terrain/Terrain.cpp
     src/terrain/TerrainRenderer.h
     src/terrain/TerrainRenderer.cpp
+    src/lod/LODLevel.h
+    src/lod/LODConfig.h
+    src/lod/LODStats.h
+    src/lod/LODGroup.h
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.h
+    src/lod/LODManager.cpp
+    src/lod/MeshSimplifier.h
+    src/lod/MeshSimplifier.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -342,5 +351,47 @@ target_link_libraries(test_terrain
     PRIVATE
         Vulkan::Vulkan
         glfw
+        glm::glm
+)
+
+# ------------------------------------------------------------------------------
+# Milestone 19 Level of Detail (LOD) Unit Tests
+# ------------------------------------------------------------------------------
+add_executable(test_lod
+    tests/test_lod.cpp
+    src/lod/LODLevel.h
+    src/lod/LODConfig.h
+    src/lod/LODStats.h
+    src/lod/LODGroup.h
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.h
+    src/lod/LODManager.cpp
+    src/lod/MeshSimplifier.h
+    src/lod/MeshSimplifier.cpp
+    src/core/Log.h
+    src/core/Log.cpp
+)
+
+target_include_directories(test_lod
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_lod
+    PRIVATE
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_lod PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_lod PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_lod PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_lod
+    PRIVATE
+        Vulkan::Vulkan
         glm::glm
 )

@@ -20,6 +20,10 @@
 #include "renderer/IBLBuilder.h"
 #include "terrain/Terrain.h"
 #include "terrain/TerrainRenderer.h"
+#include "lod/LODConfig.h"
+#include "lod/LODGroup.h"
+#include "lod/LODManager.h"
+#include "lod/LODStats.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -62,6 +66,8 @@ struct RendererTimings {
 
 struct RenderObject {
     const Mesh* mesh = nullptr;
+    const LODGroup* lodGroup = nullptr;
+    uint32_t currentLod = 0;
     glm::vec3 position{0.0f, 0.0f, 0.0f};
     glm::vec3 scale{1.0f, 1.0f, 1.0f};
     glm::vec3 rotationAxis{0.0f, 1.0f, 0.0f};
@@ -214,6 +220,18 @@ public:
     [[nodiscard]] TextureManager& getTextureManager() noexcept { return *m_textureManager; }
     [[nodiscard]] const TextureManager& getTextureManager() const noexcept { return *m_textureManager; }
 
+    // Level of Detail (LOD) System (Milestone 19)
+    [[nodiscard]] const LODManager& getLODManager() const noexcept { return m_lodManager; }
+    [[nodiscard]] LODManager& getLODManager() noexcept { return m_lodManager; }
+    [[nodiscard]] const LODStatistics& getLODStats() const noexcept { return m_lodManager.getStats(); }
+    void setLODEnabled(bool enabled) noexcept { m_lodManager.setEnabled(enabled); }
+    void cycleForcedLOD() noexcept { m_lodManager.cycleForcedLOD(); }
+    void toggleLODSelectionMode() noexcept { m_lodManager.toggleSelectionMode(); }
+    void setLODSelectionMode(LODSelectionMode mode) noexcept { m_lodManager.setSelectionMode(mode); }
+    void setForcedLOD(ForcedLODMode mode) noexcept { m_lodManager.setForcedLOD(mode); }
+    void setLODDistanceHysteresis(float hysteresis) noexcept { m_lodManager.setDistanceHysteresis(hysteresis); }
+    void setLODShadowBias(int32_t bias) noexcept { m_lodManager.setShadowLodBias(bias); }
+
     // Terrain Rendering (Milestone 18)
     [[nodiscard]] Terrain* getTerrain() noexcept { return m_terrain.get(); }
     [[nodiscard]] const Terrain* getTerrain() const noexcept { return m_terrain.get(); }
@@ -353,6 +371,26 @@ private:
     InstanceBatchManager m_batchManager;
     std::vector<GpuInstanceData> m_gpuInstances;
     std::vector<GpuBatchInfo> m_gpuBatches;
+
+    // Level of Detail (LOD) System (Milestone 19)
+    LODManager m_lodManager;
+    std::vector<std::unique_ptr<Mesh>> m_icosphereLODs;
+    std::vector<std::unique_ptr<Mesh>> m_gearLODs;
+    std::vector<std::unique_ptr<Mesh>> m_torusLODs;
+    std::vector<std::unique_ptr<Mesh>> m_torusKnotLODs;
+    std::vector<std::unique_ptr<Mesh>> m_turbineLODs;
+    std::vector<std::unique_ptr<Mesh>> m_sphereLODs;
+    std::vector<std::unique_ptr<Mesh>> m_pyramidLODs;
+    std::vector<std::unique_ptr<Mesh>> m_cubeLODs;
+
+    LODGroup* m_icosphereLODGroup = nullptr;
+    LODGroup* m_gearLODGroup = nullptr;
+    LODGroup* m_torusLODGroup = nullptr;
+    LODGroup* m_torusKnotLODGroup = nullptr;
+    LODGroup* m_turbineLODGroup = nullptr;
+    LODGroup* m_sphereLODGroup = nullptr;
+    LODGroup* m_pyramidLODGroup = nullptr;
+    LODGroup* m_cubeLODGroup = nullptr;
 
     // Terrain Rendering (Milestone 18)
     bool m_terrainEnabled = true;

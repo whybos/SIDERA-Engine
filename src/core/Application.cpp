@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.18.0";
+constexpr std::string_view kEngineVersion = "v0.19.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -29,6 +29,10 @@ Application::Application(const ApplicationConfig& config)
     m_renderer.setFrustumCullingEnabled(m_config.frustumCulling);
     m_renderer.setOcclusionCullingEnabled(m_config.occlusionCulling);
     m_renderer.setTerrainEnabled(m_config.terrainEnabled);
+    m_renderer.setLODEnabled(m_config.lodEnabled);
+    m_renderer.setLODSelectionMode(m_config.lodMode);
+    m_renderer.setForcedLOD(m_config.forceLod);
+    m_renderer.setLODDistanceHysteresis(m_config.lodHysteresis);
     if (m_config.showHiZ) {
         m_renderer.setCullingDebugMode(1);
     }
@@ -177,9 +181,27 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         terrainInfo
     );
 
+    const auto lodStats = m_renderer.getLODStats();
+    const auto& lodConfig = m_renderer.getLODManager().getConfig();
+    std::string lodInfo;
+    if (lodConfig.enabled) {
+        lodInfo = std::format(" | LOD: L0:{} L1:{} L2:{} L3:{} (-{:.1f}% tris) [{}{}]",
+                              lodStats.lod0Count,
+                              lodStats.lod1Count,
+                              lodStats.lod2Count,
+                              lodStats.lod3Count,
+                              lodStats.triangleReductionPercent,
+                              getForcedLODModeName(lodConfig.forcedLOD),
+                              lodConfig.forcedLOD == ForcedLODMode::Auto
+                                  ? (lodConfig.selectionMode == LODSelectionMode::Distance ? " DIST" : " SCREEN")
+                                  : "");
+    } else {
+        lodInfo = " | LOD: OFF";
+    }
+
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}",
         kEngineVersion,
         isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
@@ -194,7 +216,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         m_limiterEnabled ? "ON" : "OFF",
         m_renderer.isStressTestMode() ? " | STRESS MODE" : "",
         std::format(" | INSTANCING: {}", instancingModeStr),
-        vpInfo
+        vpInfo,
+        lodInfo
     );
     m_window.setTitle(title);
 
@@ -209,7 +232,7 @@ Application::~Application() {
 
 void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
-    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.18.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.19.0 — Runtime Controls Guide:");
     SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
     SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
@@ -218,6 +241,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "  [Rendering Mode]   F8 = Toggle GPU-Driven Indirect / CPU Direct Submission");
     SIDERA_LOG_INFO("Core", "  [Culling System]   F9 = Toggle Frustum Culling, F10 = Toggle Occlusion Culling, F11 = Hi-Z Depth View");
     SIDERA_LOG_INFO("Core", "  [GPU Instancing]   F12 = Cycle Instancing (Normal, 100, 1,000, 10,000 instances)");
+    SIDERA_LOG_INFO("Core", "  [Level of Detail]  L = Cycle Forced LOD (Auto, Force LOD 0..3), K = Toggle Selection Mode (Dist/Screen)");
     SIDERA_LOG_INFO("Core", "  [Viewport Modes]   V = Cycle Viewport Rendering Mode (14 modes)");
     SIDERA_LOG_INFO("Core", "  [Normal Space]     B = Toggle Normal Space (World Space / View Space)");
     SIDERA_LOG_INFO("Core", "  [Viewport Layout]  T = Toggle Viewport Layout (Single / Split Horizontal Dual)");
@@ -225,7 +249,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -239,6 +263,7 @@ void Application::run() {
     bool testedResizeStep2 = false;
     bool testedViewportModes = false;
     bool testedStressToggling = false;
+    bool testedLOD = false;
     bool f2WasDown = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
@@ -253,6 +278,8 @@ void Application::run() {
     bool vWasDown = false;
     bool bWasDown = false;
     bool tWasDown = false;
+    bool lWasDown = false;
+    bool kWasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -261,7 +288,7 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F2: terrain, F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, V: Viewport mode, B: Normal space, T: Split view
+        // F2: terrain, F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, L: Forced LOD, K: LOD mode, V: Viewport mode, B: Normal space, T: Split view
         const bool f2Down = m_window.isKeyPressed(GLFW_KEY_F2);
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
@@ -273,6 +300,8 @@ void Application::run() {
         const bool f10Down = m_window.isKeyPressed(GLFW_KEY_F10);
         const bool f11Down = m_window.isKeyPressed(GLFW_KEY_F11);
         const bool f12Down = m_window.isKeyPressed(GLFW_KEY_F12);
+        const bool lDown = m_window.isKeyPressed(GLFW_KEY_L);
+        const bool kDown = m_window.isKeyPressed(GLFW_KEY_K);
         const bool vDown = m_window.isKeyPressed(GLFW_KEY_V);
         const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
@@ -343,6 +372,18 @@ void Application::run() {
             m_renderer.cycleInstancingMode();
             m_frameStats.reset();
         }
+        if (lDown && !lWasDown) {
+            m_renderer.cycleForcedLOD();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "LOD forced mode: {}.",
+                            getForcedLODModeName(m_renderer.getLODManager().getConfig().forcedLOD));
+        }
+        if (kDown && !kWasDown) {
+            m_renderer.toggleLODSelectionMode();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "LOD selection mode: {}.",
+                            getLODSelectionModeName(m_renderer.getLODManager().getConfig().selectionMode));
+        }
         if (vDown && !vWasDown) {
             m_renderer.cycleViewportMode();
             m_frameStats.reset();
@@ -366,6 +407,8 @@ void Application::run() {
         f10WasDown = f10Down;
         f11WasDown = f11Down;
         f12WasDown = f12Down;
+        lWasDown = lDown;
+        kWasDown = kDown;
         vWasDown = vDown;
         bWasDown = bDown;
         tWasDown = tDown;
@@ -468,7 +511,17 @@ void Application::run() {
                 m_renderer.toggleStressTestMode(); // OFF
                 m_renderer.toggleStressTestMode(); // ON
                 m_renderer.toggleStressTestMode(); // OFF
-            } else if (elapsed >= std::chrono::milliseconds(2700)) {
+            } else if (!testedLOD && elapsed >= std::chrono::milliseconds(2400)) {
+                testedLOD = true;
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Cycling LOD modes and toggling selection mode...");
+                m_renderer.cycleForcedLOD(); // Force LOD 0
+                m_renderer.cycleForcedLOD(); // Force LOD 1
+                m_renderer.cycleForcedLOD(); // Force LOD 2
+                m_renderer.cycleForcedLOD(); // Force LOD 3
+                m_renderer.cycleForcedLOD(); // Auto
+                m_renderer.toggleLODSelectionMode(); // Screen-space
+                m_renderer.toggleLODSelectionMode(); // Distance
+            } else if (elapsed >= std::chrono::milliseconds(2850)) {
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Frame loop verification complete; requesting close.");
                 m_window.requestClose();
             }

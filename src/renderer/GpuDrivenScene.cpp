@@ -484,7 +484,7 @@ void GpuDrivenScene::setSceneBatches(const InstanceBatchManager& batchManager) {
         resetMainCommands(f);
     }
 
-    SIDERA_LOG_INFO(
+    SIDERA_LOG_DEBUG(
         "GpuDriven",
         "Configured GPU instanced scene: {} total instances across {} batches.",
         m_totalInstanceCount,

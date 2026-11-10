@@ -238,19 +238,75 @@ Renderer::~Renderer() {
 }
 
 void Renderer::updateScene(float deltaTime) noexcept {
-    if (m_instancingMode == InstancingMode::Normal) {
-        for (auto& obj : m_renderObjects) {
-            if (obj.angularSpeed != 0.0f) {
-                obj.rotationRadians += obj.angularSpeed * deltaTime;
-            }
+    // 1. Update rotations and evaluate automatic LOD selection (Milestone 19)
+    m_lodManager.beginFrameStats();
+    const glm::vec3 camPos = m_camera.getPosition();
+    const float fovRad = glm::radians(m_camera.getFovDegrees());
+    const float cotHalfFov = 1.0f / std::tan(fovRad * 0.5f);
+    const float vpHeight = static_cast<float>(m_swapchain->getExtent().height);
+
+    bool lodChanged = false;
+    for (size_t i = 0; i < m_renderObjects.size(); ++i) {
+        auto& obj = m_renderObjects[i];
+        if (obj.angularSpeed != 0.0f) {
+            obj.rotationRadians += obj.angularSpeed * deltaTime;
         }
-        for (const auto& batch : m_batchManager.getBatches()) {
-            for (uint32_t idx = 0; idx < batch->getInstanceCount(); ++idx) {
-                const uint32_t objIdx = batch->getInstances()[idx].customId;
-                if (objIdx < m_renderObjects.size()) {
-                    batch->updateInstanceTransform(idx, m_renderObjects[objIdx].computeModelMatrix());
-                }
+
+        if (obj.lodGroup && obj.lodGroup->getLevelCount() > 0) {
+            const glm::vec3 worldPos = obj.position;
+            const float dist = glm::length(worldPos - camPos);
+            const float radius = obj.computeWorldBoundingSphere().radius;
+            const float projScreenSize = (2.0f * radius * cotHalfFov / std::max(0.1f, dist)) * (vpHeight * 0.5f);
+
+            const uint32_t chosenLod = m_lodManager.selectLOD(
+                *obj.lodGroup,
+                dist,
+                projScreenSize,
+                obj.currentLod
+            );
+
+            if (chosenLod != obj.currentLod) {
+                obj.currentLod = chosenLod;
+                obj.mesh = obj.lodGroup->getLevel(chosenLod).mesh;
+                lodChanged = true;
             }
+
+            const uint64_t origTris = obj.lodGroup->getLevel(0).mesh
+                ? (obj.lodGroup->getLevel(0).mesh->getIndexCount() / 3) : 0;
+            const uint64_t curTris = obj.mesh
+                ? (obj.mesh->getIndexCount() / 3) : 0;
+            m_lodManager.recordObjectLOD(obj.currentLod, origTris, curTris);
+        }
+    }
+    m_lodManager.endFrameStats();
+
+    // 2. Repopulate batches with active LOD meshes
+    if (m_instancingMode == InstancingMode::Normal) {
+        m_batchManager.clear();
+        for (size_t i = 0; i < m_renderObjects.size(); ++i) {
+            const auto& obj = m_renderObjects[i];
+            if (!obj.mesh) continue;
+            Material mat{
+                .albedo = obj.albedo,
+                .metallic = obj.metallic,
+                .roughness = obj.roughness,
+                .ao = obj.ao,
+                .textureStrength = obj.textureStrength,
+                .emissive = obj.emissive,
+                .normalMapStrength = obj.normalMapStrength
+            };
+            Instance inst{};
+            inst.transform = obj.computeModelMatrix();
+            inst.customId = static_cast<uint32_t>(i);
+            inst.angularSpeed = obj.angularSpeed;
+            inst.rotationAxis = obj.rotationAxis;
+            inst.rotationRadians = obj.rotationRadians;
+            inst.position = obj.position;
+            m_batchManager.addInstance(obj.mesh, mat, inst);
+        }
+        m_batchManager.rebuildGlobalOffsets();
+        if (isGpuDrivenActive() && lodChanged) {
+            m_gpuScene->setSceneBatches(m_batchManager);
         }
     } else {
         for (const auto& batch : m_batchManager.getBatches()) {
@@ -1505,53 +1561,100 @@ void Renderer::createSceneMeshes() {
     m_gpuInstances.clear();
     m_gpuBatches.clear();
 
-    if (!m_stressTestMode) {
-        // -------------------------------------------------------------
-        // NORMAL HIGH-QUALITY SCENE (>= 250,000 visible triangles)
-        // -------------------------------------------------------------
-        m_groundMesh = Mesh::createGroundGrid(dev, pool, 6.0f, 16);
-        m_sphereMesh = Mesh::createSphere(dev, pool, 0.20f, 32, 48);
-        m_cubeMesh = Mesh::createCube(dev, pool, 0.45f);
-        m_pyramidMesh = Mesh::createPyramid(dev, pool, 0.45f, 0.95f);
+    // -----------------------------------------------------------------
+    // MULTI-TIER LEVEL OF DETAIL (LOD) MESHES & GROUPS (Milestone 19)
+    // -----------------------------------------------------------------
+    m_icosphereLODs.clear();
+    m_gearLODs.clear();
+    m_torusLODs.clear();
+    m_torusKnotLODs.clear();
+    m_turbineLODs.clear();
+    m_sphereLODs.clear();
+    m_pyramidLODs.clear();
+    m_cubeLODs.clear();
+    m_lodManager.clear();
 
-        // A. High-resolution Icosphere (subdivisions = 5 -> 20,480 triangles each)
-        m_icosphereMesh = ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 5, "Icosphere_Subdiv5");
+    m_groundMesh = Mesh::createGroundGrid(dev, pool, 6.0f, m_stressTestMode ? 24 : 16);
+    m_cubeMesh = Mesh::createCube(dev, pool, 0.45f);
+    m_pyramidMesh = Mesh::createPyramid(dev, pool, 0.45f, 0.95f);
 
-        // B. Mechanical Gear with teeth, hub, bore, and recessed web (~32,000 triangles each)
-        m_gearMesh = ProceduralMeshes::createGear(dev, pool, 30, 0.65f, 0.48f, 0.18f, 0.16f, 16, "Gear_High");
+    m_cubeLODGroup = &m_lodManager.createLODGroup("Cube");
+    m_cubeLODGroup->addLevel(m_cubeMesh.get(), 1e6f, 0.0f, 1.0f);
 
-        // C. High-polygon Torus (144 x 64 -> 18,432 triangles each)
-        m_torusMesh = ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 144, 64, "Torus_High");
+    m_pyramidLODGroup = &m_lodManager.createLODGroup("Pyramid");
+    m_pyramidLODGroup->addLevel(m_pyramidMesh.get(), 1e6f, 0.0f, 1.0f);
 
-        // D. Procedural Torus Knot (360 x 64 -> 46,080 triangles each)
-        m_torusKnotMesh = ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 360, 64, "TorusKnot_High");
+    // 1. Icosphere: LOD 0 (subdiv 5), LOD 1 (subdiv 4), LOD 2 (subdiv 3), LOD 3 (subdiv 1)
+    m_icosphereLODs.push_back(ProceduralMeshes::createIcosphere(dev, pool, 0.38f, m_stressTestMode ? 6 : 5, "Icosphere_LOD0"));
+    m_icosphereLODs.push_back(ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 4, "Icosphere_LOD1"));
+    m_icosphereLODs.push_back(ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 3, "Icosphere_LOD2"));
+    m_icosphereLODs.push_back(ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 1, "Icosphere_LOD3"));
+    m_icosphereMesh = std::make_unique<Mesh>(dev, pool, m_icosphereLODs[0]->getCpuVertices(), m_icosphereLODs[0]->getCpuIndices(), "Icosphere_Subdiv5");
+    m_icosphereLODGroup = &m_lodManager.createLODGroup("Icosphere");
+    m_icosphereLODGroup->addLevel(m_icosphereLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_icosphereLODGroup->addLevel(m_icosphereLODs[1].get(), 30.0f, 110.0f, 0.25f);
+    m_icosphereLODGroup->addLevel(m_icosphereLODs[2].get(), 55.0f, 45.0f, 0.06f);
+    m_icosphereLODGroup->addLevel(m_icosphereLODs[3].get(), 1e6f, 0.0f, 0.004f);
 
-        // E. Detailed Multi-Part Turbine Rotor with 30 twisted airfoil blades (~38,000 triangles each)
-        m_turbineMesh = ProceduralMeshes::createTurbine(dev, pool, 30, 0.20f, 0.68f, 0.35f, 35.0f, 16, 16, "Turbine_High");
-    } else {
-        // -------------------------------------------------------------
-        // HIGH-POLY STRESS-TEST SCENE (>= 1,000,000 visible triangles)
-        // -------------------------------------------------------------
-        m_groundMesh = Mesh::createGroundGrid(dev, pool, 6.0f, 24);
-        m_sphereMesh = Mesh::createSphere(dev, pool, 0.20f, 32, 48);
-        m_cubeMesh = Mesh::createCube(dev, pool, 0.45f);
-        m_pyramidMesh = Mesh::createPyramid(dev, pool, 0.45f, 0.95f);
+    // 2. Mechanical Gear: LOD 0 (30t/16r), LOD 1 (24t/8r), LOD 2 (16t/4r), LOD 3 (10t/2r)
+    m_gearLODs.push_back(ProceduralMeshes::createGear(dev, pool, m_stressTestMode ? 40 : 30, 0.65f, 0.48f, 0.18f, 0.16f, m_stressTestMode ? 28 : 16, "Gear_LOD0"));
+    m_gearLODs.push_back(ProceduralMeshes::createGear(dev, pool, 24, 0.65f, 0.48f, 0.18f, 0.16f, 8, "Gear_LOD1"));
+    m_gearLODs.push_back(ProceduralMeshes::createGear(dev, pool, 16, 0.65f, 0.48f, 0.18f, 0.16f, 4, "Gear_LOD2"));
+    m_gearLODs.push_back(ProceduralMeshes::createGear(dev, pool, 10, 0.65f, 0.48f, 0.18f, 0.16f, 2, "Gear_LOD3"));
+    m_gearMesh = std::make_unique<Mesh>(dev, pool, m_gearLODs[0]->getCpuVertices(), m_gearLODs[0]->getCpuIndices(), "Gear_High");
+    m_gearLODGroup = &m_lodManager.createLODGroup("Gear");
+    m_gearLODGroup->addLevel(m_gearLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_gearLODGroup->addLevel(m_gearLODs[1].get(), 30.0f, 110.0f, 0.42f);
+    m_gearLODGroup->addLevel(m_gearLODs[2].get(), 55.0f, 45.0f, 0.15f);
+    m_gearLODGroup->addLevel(m_gearLODs[3].get(), 1e6f, 0.0f, 0.038f);
 
-        // A. High-resolution Icosphere (subdivisions = 6 -> 81,920 triangles each)
-        m_icosphereMesh = ProceduralMeshes::createIcosphere(dev, pool, 0.38f, 6, "Icosphere_Subdiv6");
+    // 3. Torus: LOD 0 (144x64), LOD 1 (72x32), LOD 2 (36x16), LOD 3 (18x8)
+    m_torusLODs.push_back(ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, m_stressTestMode ? 320 : 144, m_stressTestMode ? 128 : 64, "Torus_LOD0"));
+    m_torusLODs.push_back(ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 72, 32, "Torus_LOD1"));
+    m_torusLODs.push_back(ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 36, 16, "Torus_LOD2"));
+    m_torusLODs.push_back(ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 18, 8, "Torus_LOD3"));
+    m_torusMesh = std::make_unique<Mesh>(dev, pool, m_torusLODs[0]->getCpuVertices(), m_torusLODs[0]->getCpuIndices(), "Torus_High");
+    m_torusLODGroup = &m_lodManager.createLODGroup("Torus");
+    m_torusLODGroup->addLevel(m_torusLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_torusLODGroup->addLevel(m_torusLODs[1].get(), 30.0f, 110.0f, 0.25f);
+    m_torusLODGroup->addLevel(m_torusLODs[2].get(), 55.0f, 45.0f, 0.06f);
+    m_torusLODGroup->addLevel(m_torusLODs[3].get(), 1e6f, 0.0f, 0.015f);
 
-        // B. Mechanical Gear (40 teeth, 28 radial rings -> ~50,000 triangles each)
-        m_gearMesh = ProceduralMeshes::createGear(dev, pool, 40, 0.65f, 0.48f, 0.18f, 0.16f, 28, "Gear_Ultra");
+    // 4. Torus Knot: LOD 0 (360x64), LOD 1 (180x32), LOD 2 (90x16), LOD 3 (45x8)
+    m_torusKnotLODs.push_back(ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, m_stressTestMode ? 720 : 360, m_stressTestMode ? 128 : 64, "TorusKnot_LOD0"));
+    m_torusKnotLODs.push_back(ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 180, 32, "TorusKnot_LOD1"));
+    m_torusKnotLODs.push_back(ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 90, 16, "TorusKnot_LOD2"));
+    m_torusKnotLODs.push_back(ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 45, 8, "TorusKnot_LOD3"));
+    m_torusKnotMesh = std::make_unique<Mesh>(dev, pool, m_torusKnotLODs[0]->getCpuVertices(), m_torusKnotLODs[0]->getCpuIndices(), "TorusKnot_High");
+    m_torusKnotLODGroup = &m_lodManager.createLODGroup("TorusKnot");
+    m_torusKnotLODGroup->addLevel(m_torusKnotLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_torusKnotLODGroup->addLevel(m_torusKnotLODs[1].get(), 30.0f, 110.0f, 0.25f);
+    m_torusKnotLODGroup->addLevel(m_torusKnotLODs[2].get(), 55.0f, 45.0f, 0.06f);
+    m_torusKnotLODGroup->addLevel(m_torusKnotLODs[3].get(), 1e6f, 0.0f, 0.015f);
 
-        // C. High-polygon Torus (320 x 128 -> 81,920 triangles each)
-        m_torusMesh = ProceduralMeshes::createTorus(dev, pool, 0.50f, 0.13f, 320, 128, "Torus_Ultra");
+    // 5. Turbine Rotor: LOD 0 (30 blades 16x16), LOD 1 (20 blades 8x8), LOD 2 (12 blades 4x4), LOD 3 (8 blades 2x2)
+    m_turbineLODs.push_back(ProceduralMeshes::createTurbine(dev, pool, m_stressTestMode ? 48 : 30, 0.20f, 0.68f, 0.35f, 35.0f, m_stressTestMode ? 24 : 16, m_stressTestMode ? 30 : 16, "Turbine_LOD0"));
+    m_turbineLODs.push_back(ProceduralMeshes::createTurbine(dev, pool, 20, 0.20f, 0.68f, 0.35f, 35.0f, 8, 8, "Turbine_LOD1"));
+    m_turbineLODs.push_back(ProceduralMeshes::createTurbine(dev, pool, 12, 0.20f, 0.68f, 0.35f, 35.0f, 4, 4, "Turbine_LOD2"));
+    m_turbineLODs.push_back(ProceduralMeshes::createTurbine(dev, pool, 8, 0.20f, 0.68f, 0.35f, 35.0f, 2, 2, "Turbine_LOD3"));
+    m_turbineMesh = std::make_unique<Mesh>(dev, pool, m_turbineLODs[0]->getCpuVertices(), m_turbineLODs[0]->getCpuIndices(), "Turbine_High");
+    m_turbineLODGroup = &m_lodManager.createLODGroup("Turbine");
+    m_turbineLODGroup->addLevel(m_turbineLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_turbineLODGroup->addLevel(m_turbineLODs[1].get(), 30.0f, 110.0f, 0.31f);
+    m_turbineLODGroup->addLevel(m_turbineLODs[2].get(), 55.0f, 45.0f, 0.09f);
+    m_turbineLODGroup->addLevel(m_turbineLODs[3].get(), 1e6f, 0.0f, 0.021f);
 
-        // D. Procedural Torus Knot (720 x 128 -> 184,320 triangles each)
-        m_torusKnotMesh = ProceduralMeshes::createTorusKnot(dev, pool, 2, 3, 0.40f, 0.088f, 720, 128, "TorusKnot_Ultra");
-
-        // E. Detailed Turbine Rotor (48 blades, 24 span x 30 chord -> ~80,000 triangles each)
-        m_turbineMesh = ProceduralMeshes::createTurbine(dev, pool, 48, 0.20f, 0.68f, 0.35f, 35.0f, 24, 30, "Turbine_Ultra");
-    }
+    // 6. Sphere: LOD 0 (32x48), LOD 1 (16x24), LOD 2 (8x12), LOD 3 (4x6)
+    m_sphereLODs.push_back(Mesh::createSphere(dev, pool, 0.20f, 32, 48));
+    m_sphereLODs.push_back(Mesh::createSphere(dev, pool, 0.20f, 16, 24));
+    m_sphereLODs.push_back(Mesh::createSphere(dev, pool, 0.20f, 8, 12));
+    m_sphereLODs.push_back(Mesh::createSphere(dev, pool, 0.20f, 4, 6));
+    m_sphereMesh = std::make_unique<Mesh>(dev, pool, m_sphereLODs[0]->getCpuVertices(), m_sphereLODs[0]->getCpuIndices(), "SphereMesh");
+    m_sphereLODGroup = &m_lodManager.createLODGroup("Sphere");
+    m_sphereLODGroup->addLevel(m_sphereLODs[0].get(), 14.0f, 220.0f, 1.0f);
+    m_sphereLODGroup->addLevel(m_sphereLODs[1].get(), 30.0f, 110.0f, 0.25f);
+    m_sphereLODGroup->addLevel(m_sphereLODs[2].get(), 55.0f, 45.0f, 0.06f);
+    m_sphereLODGroup->addLevel(m_sphereLODs[3].get(), 1e6f, 0.0f, 0.015f);
 
     SIDERA_LOG_INFO("Renderer", "[StressTest] New meshes created (mode: {}).", m_stressTestMode ? "STRESS TEST" : "NORMAL");
 
@@ -1579,7 +1682,7 @@ void Renderer::createSceneMeshes() {
     m_terrainRenderer->updateMaterialDescriptors(*m_terrain);
 
     // -----------------------------------------------------------------
-    // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT
+    // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
     m_renderObjects.push_back(RenderObject{
@@ -1589,9 +1692,14 @@ void Renderer::createSceneMeshes() {
         .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f, .normalMapStrength = 0.85f
     });
 
+    // =================================================================
+    // TIER 1: FOREGROUND CLOSE-UP OBJECTS (LOD 0: ~0 - 14m)
+    // =================================================================
     // 2. Centerpiece Turbine 1: Machined Titanium
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_turbineMesh.get(),
+        .mesh = m_turbineLODs[0].get(),
+        .lodGroup = m_turbineLODGroup,
+        .currentLod = 0,
         .position = {0.0f, 0.52f, -0.45f},
         .rotationAxis = {0.0f, 0.0f, 1.0f},
         .angularSpeed = 0.45f,
@@ -1601,7 +1709,9 @@ void Renderer::createSceneMeshes() {
 
     // 3. Centerpiece Torus Knot 1: Polished Mirror Chrome
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_torusKnotMesh.get(),
+        .mesh = m_torusKnotLODs[0].get(),
+        .lodGroup = m_torusKnotLODGroup,
+        .currentLod = 0,
         .position = {0.0f, 1.50f, -1.75f},
         .rotationAxis = {0.25f, 1.0f, 0.15f},
         .angularSpeed = 0.35f,
@@ -1611,7 +1721,9 @@ void Renderer::createSceneMeshes() {
 
     // 4. Centerpiece Turbine 2: Cast Industrial Steel (elevated back)
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_turbineMesh.get(),
+        .mesh = m_turbineLODs[0].get(),
+        .lodGroup = m_turbineLODGroup,
+        .currentLod = 0,
         .position = {0.0f, 1.75f, -3.10f},
         .rotationAxis = {0.12f, 0.0f, 1.0f},
         .angularSpeed = -0.30f,
@@ -1621,7 +1733,9 @@ void Renderer::createSceneMeshes() {
 
     // 5. Left Flank Gear 1: Polished Brass / Gold
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_gearMesh.get(),
+        .mesh = m_gearLODs[0].get(),
+        .lodGroup = m_gearLODGroup,
+        .currentLod = 0,
         .position = {-2.25f, 0.15f, -0.65f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .angularSpeed = -0.40f,
@@ -1631,7 +1745,9 @@ void Renderer::createSceneMeshes() {
 
     // 6. Left Flank Torus 1: Platinum
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_torusMesh.get(),
+        .mesh = m_torusLODs[0].get(),
+        .lodGroup = m_torusLODGroup,
+        .currentLod = 0,
         .position = {-2.35f, 0.35f, 0.85f},
         .rotationAxis = {1.0f, 0.4f, 0.2f},
         .angularSpeed = 0.35f,
@@ -1641,7 +1757,9 @@ void Renderer::createSceneMeshes() {
 
     // 7. Left Flank Icosphere 1: Smooth Emerald Dielectric
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_icosphereMesh.get(),
+        .mesh = m_icosphereLODs[0].get(),
+        .lodGroup = m_icosphereLODGroup,
+        .currentLod = 0,
         .position = {-1.35f, -0.08f, 1.55f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .angularSpeed = 0.20f,
@@ -1651,7 +1769,9 @@ void Renderer::createSceneMeshes() {
 
     // 8. Right Flank Torus Knot 2: Brushed Copper
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_torusKnotMesh.get(),
+        .mesh = m_torusKnotLODs[0].get(),
+        .lodGroup = m_torusKnotLODGroup,
+        .currentLod = 0,
         .position = {2.25f, 0.50f, -0.65f},
         .rotationAxis = {-0.25f, 1.0f, 0.20f},
         .angularSpeed = 0.30f,
@@ -1661,7 +1781,9 @@ void Renderer::createSceneMeshes() {
 
     // 9. Right Flank Gear 2: Industrial Dark Gunmetal
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_gearMesh.get(),
+        .mesh = m_gearLODs[0].get(),
+        .lodGroup = m_gearLODGroup,
+        .currentLod = 0,
         .position = {2.35f, 0.15f, 0.85f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .angularSpeed = 0.40f,
@@ -1671,7 +1793,9 @@ void Renderer::createSceneMeshes() {
 
     // 10. Right Flank Icosphere 2: Frosted Ruby Dielectric
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_icosphereMesh.get(),
+        .mesh = m_icosphereLODs[0].get(),
+        .lodGroup = m_icosphereLODGroup,
+        .currentLod = 0,
         .position = {1.35f, -0.08f, 1.55f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .angularSpeed = -0.20f,
@@ -1681,7 +1805,9 @@ void Renderer::createSceneMeshes() {
 
     // 11. Right Background Torus 2: Cobalt Blue Metal
     m_renderObjects.push_back(RenderObject{
-        .mesh = m_torusMesh.get(),
+        .mesh = m_torusLODs[0].get(),
+        .lodGroup = m_torusLODGroup,
+        .currentLod = 0,
         .position = {1.35f, 1.45f, -2.60f},
         .rotationAxis = {0.4f, 0.5f, 0.7f},
         .angularSpeed = -0.30f,
@@ -1692,6 +1818,8 @@ void Renderer::createSceneMeshes() {
     // 12. Far Background Left: Polished Teal Metal Pyramid
     m_renderObjects.push_back(RenderObject{
         .mesh = m_pyramidMesh.get(),
+        .lodGroup = m_pyramidLODGroup,
+        .currentLod = 0,
         .position = {-3.0f, 0.15f, -3.40f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .rotationRadians = 0.35f,
@@ -1703,6 +1831,8 @@ void Renderer::createSceneMeshes() {
     // 13. Far Background Center: Textured Rotating Cube
     m_renderObjects.push_back(RenderObject{
         .mesh = m_cubeMesh.get(),
+        .lodGroup = m_cubeLODGroup,
+        .currentLod = 0,
         .position = {0.0f, 0.15f, -4.10f},
         .rotationAxis = {0.2f, 1.0f, 0.1f},
         .rotationRadians = 0.40f,
@@ -1714,6 +1844,8 @@ void Renderer::createSceneMeshes() {
     // 14. Far Background Right: Royal Blue Dielectric Pyramid
     m_renderObjects.push_back(RenderObject{
         .mesh = m_pyramidMesh.get(),
+        .lodGroup = m_pyramidLODGroup,
+        .currentLod = 0,
         .position = {3.0f, 0.15f, -3.40f},
         .rotationAxis = {0.0f, 1.0f, 0.0f},
         .rotationRadians = -0.50f,
@@ -1722,39 +1854,16 @@ void Renderer::createSceneMeshes() {
         .metallic = 0.0f, .roughness = 0.55f, .ao = 1.0f, .textureStrength = 0.0f
     });
 
-    // 15. Additional Stress-Test Exclusive Showcase Objects
-    if (m_stressTestMode) {
-        // Sapphire Dielectric Icosphere
-        m_renderObjects.push_back(RenderObject{
-            .mesh = m_icosphereMesh.get(),
-            .position = {-3.10f, 0.35f, -1.65f},
-            .rotationAxis = {0.0f, 1.0f, 0.0f},
-            .angularSpeed = 0.30f,
-            .albedo = {0.10f, 0.28f, 0.92f},
-            .metallic = 0.0f, .roughness = 0.15f, .ao = 1.0f, .textureStrength = 0.0f
-        });
-
-        // Amber Dielectric Icosphere
-        m_renderObjects.push_back(RenderObject{
-            .mesh = m_icosphereMesh.get(),
-            .position = {3.10f, 0.35f, -1.65f},
-            .rotationAxis = {0.0f, 1.0f, 0.0f},
-            .angularSpeed = -0.30f,
-            .albedo = {0.95f, 0.58f, 0.08f},
-            .metallic = 0.0f, .roughness = 0.25f, .ao = 1.0f, .textureStrength = 0.0f
-        });
-    }
-
-    // 16. Foreground Sphere Showcase: 10 spheres demonstrating roughness progression
-    //  Front row (z = +2.45): dielectric red plastic (roughness 0.08 -> 0.90)
-    //  Back row  (z = +2.00): gold metal (roughness 0.08 -> 0.90)
+    // 15. Foreground Sphere Showcase: 10 spheres demonstrating roughness progression
     constexpr int kColumns = 5;
     for (int row = 0; row < 2; ++row) {
         const bool metal = (row == 1);
         for (int col = 0; col < kColumns; ++col) {
             const float t = static_cast<float>(col) / static_cast<float>(kColumns - 1);
             m_renderObjects.push_back(RenderObject{
-                .mesh = m_sphereMesh.get(),
+                .mesh = m_sphereLODs[0].get(),
+                .lodGroup = m_sphereLODGroup,
+                .currentLod = 0,
                 .position = {-1.0f + 0.50f * static_cast<float>(col), -0.60f + 0.20f, metal ? 2.00f : 2.45f},
                 .albedo = metal ? glm::vec3{1.00f, 0.77f, 0.34f} : glm::vec3{0.80f, 0.10f, 0.08f},
                 .metallic = metal ? 1.0f : 0.0f,
@@ -1764,6 +1873,205 @@ void Renderer::createSceneMeshes() {
             });
         }
     }
+
+    // =================================================================
+    // TIER 2: MIDGROUND CORRIDOR OBJECTS (LOD 1: ~14 - 30m distance)
+    // =================================================================
+    // Midground Turbine (Gold)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_turbineLODs[0].get(),
+        .lodGroup = m_turbineLODGroup,
+        .currentLod = 0,
+        .position = {-5.5f, 1.8f, -16.0f},
+        .rotationAxis = {0.0f, 0.0f, 1.0f},
+        .angularSpeed = 0.40f,
+        .albedo = {1.0f, 0.82f, 0.30f},
+        .metallic = 1.0f, .roughness = 0.25f, .ao = 1.0f
+    });
+
+    // Midground Torus Knot (Violet Metal)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusKnotLODs[0].get(),
+        .lodGroup = m_torusKnotLODGroup,
+        .currentLod = 0,
+        .position = {-1.8f, 2.2f, -18.0f},
+        .rotationAxis = {0.3f, 1.0f, 0.1f},
+        .angularSpeed = 0.30f,
+        .albedo = {0.70f, 0.25f, 0.95f},
+        .metallic = 1.0f, .roughness = 0.15f, .ao = 1.0f
+    });
+
+    // Midground Gear (Steel)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_gearLODs[0].get(),
+        .lodGroup = m_gearLODGroup,
+        .currentLod = 0,
+        .position = {1.8f, 1.6f, -17.0f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = -0.35f,
+        .albedo = {0.75f, 0.78f, 0.82f},
+        .metallic = 1.0f, .roughness = 0.35f, .ao = 1.0f
+    });
+
+    // Midground Torus (Bronze)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusLODs[0].get(),
+        .lodGroup = m_torusLODGroup,
+        .currentLod = 0,
+        .position = {5.5f, 1.8f, -16.0f},
+        .rotationAxis = {1.0f, 0.2f, 0.5f},
+        .angularSpeed = 0.28f,
+        .albedo = {0.88f, 0.55f, 0.28f},
+        .metallic = 1.0f, .roughness = 0.22f, .ao = 1.0f
+    });
+
+    // Midground Icosphere (Cyan Dielectric)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_icosphereLODs[0].get(),
+        .lodGroup = m_icosphereLODGroup,
+        .currentLod = 0,
+        .position = {0.0f, 1.5f, -15.5f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = 0.25f,
+        .albedo = {0.10f, 0.85f, 0.90f},
+        .metallic = 0.0f, .roughness = 0.10f, .ao = 1.0f
+    });
+
+    // =================================================================
+    // TIER 3: DISTANT RIDGE OBJECTS (LOD 2: ~30 - 55m distance)
+    // =================================================================
+    // Distant Turbine (Silver)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_turbineLODs[0].get(),
+        .lodGroup = m_turbineLODGroup,
+        .currentLod = 0,
+        .position = {-8.5f, 3.2f, -36.0f},
+        .scale = {1.5f, 1.5f, 1.5f},
+        .rotationAxis = {0.0f, 0.0f, 1.0f},
+        .angularSpeed = 0.35f,
+        .albedo = {0.90f, 0.90f, 0.92f},
+        .metallic = 1.0f, .roughness = 0.30f, .ao = 1.0f
+    });
+
+    // Distant Torus Knot (Crimson Metal)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusKnotLODs[0].get(),
+        .lodGroup = m_torusKnotLODGroup,
+        .currentLod = 0,
+        .position = {-3.0f, 3.5f, -40.0f},
+        .scale = {1.5f, 1.5f, 1.5f},
+        .rotationAxis = {0.2f, 1.0f, 0.3f},
+        .angularSpeed = 0.25f,
+        .albedo = {0.92f, 0.15f, 0.25f},
+        .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f
+    });
+
+    // Distant Gear (Brass)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_gearLODs[0].get(),
+        .lodGroup = m_gearLODGroup,
+        .currentLod = 0,
+        .position = {3.0f, 3.0f, -38.0f},
+        .scale = {1.5f, 1.5f, 1.5f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = -0.30f,
+        .albedo = {0.95f, 0.75f, 0.25f},
+        .metallic = 1.0f, .roughness = 0.25f, .ao = 1.0f
+    });
+
+    // Distant Torus (Chrome)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusLODs[0].get(),
+        .lodGroup = m_torusLODGroup,
+        .currentLod = 0,
+        .position = {8.5f, 3.2f, -36.0f},
+        .scale = {1.5f, 1.5f, 1.5f},
+        .rotationAxis = {0.5f, 0.5f, 0.7f},
+        .angularSpeed = 0.20f,
+        .albedo = {0.95f, 0.95f, 0.95f},
+        .metallic = 1.0f, .roughness = 0.10f, .ao = 1.0f
+    });
+
+    // Distant Icosphere (Amber)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_icosphereLODs[0].get(),
+        .lodGroup = m_icosphereLODGroup,
+        .currentLod = 0,
+        .position = {0.0f, 2.8f, -35.0f},
+        .scale = {1.5f, 1.5f, 1.5f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = 0.20f,
+        .albedo = {0.98f, 0.60f, 0.05f},
+        .metallic = 0.0f, .roughness = 0.20f, .ao = 1.0f
+    });
+
+    // =================================================================
+    // TIER 4: FAR HORIZON OBJECTS (LOD 3: ~55m+ distance)
+    // =================================================================
+    // Horizon Turbine (Monumental Scale)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_turbineLODs[0].get(),
+        .lodGroup = m_turbineLODGroup,
+        .currentLod = 0,
+        .position = {-14.0f, 6.0f, -65.0f},
+        .scale = {2.5f, 2.5f, 2.5f},
+        .rotationAxis = {0.0f, 0.0f, 1.0f},
+        .angularSpeed = 0.20f,
+        .albedo = {0.85f, 0.88f, 0.92f},
+        .metallic = 1.0f, .roughness = 0.35f, .ao = 1.0f
+    });
+
+    // Horizon Torus Knot (Monumental Scale)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusKnotLODs[0].get(),
+        .lodGroup = m_torusKnotLODGroup,
+        .currentLod = 0,
+        .position = {-4.5f, 6.5f, -70.0f},
+        .scale = {2.5f, 2.5f, 2.5f},
+        .rotationAxis = {0.2f, 1.0f, 0.1f},
+        .angularSpeed = 0.15f,
+        .albedo = {0.40f, 0.70f, 0.95f},
+        .metallic = 1.0f, .roughness = 0.25f, .ao = 1.0f
+    });
+
+    // Horizon Gear (Monumental Scale)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_gearLODs[0].get(),
+        .lodGroup = m_gearLODGroup,
+        .currentLod = 0,
+        .position = {4.5f, 5.5f, -68.0f},
+        .scale = {2.5f, 2.5f, 2.5f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = -0.20f,
+        .albedo = {0.95f, 0.80f, 0.35f},
+        .metallic = 1.0f, .roughness = 0.30f, .ao = 1.0f
+    });
+
+    // Horizon Torus (Monumental Scale)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_torusLODs[0].get(),
+        .lodGroup = m_torusLODGroup,
+        .currentLod = 0,
+        .position = {14.0f, 6.0f, -65.0f},
+        .scale = {2.5f, 2.5f, 2.5f},
+        .rotationAxis = {0.4f, 0.6f, 0.2f},
+        .angularSpeed = 0.18f,
+        .albedo = {0.92f, 0.35f, 0.75f},
+        .metallic = 1.0f, .roughness = 0.20f, .ao = 1.0f
+    });
+
+    // Horizon Icosphere (Monumental Scale)
+    m_renderObjects.push_back(RenderObject{
+        .mesh = m_icosphereLODs[0].get(),
+        .lodGroup = m_icosphereLODGroup,
+        .currentLod = 0,
+        .position = {0.0f, 5.0f, -62.0f},
+        .scale = {2.5f, 2.5f, 2.5f},
+        .rotationAxis = {0.0f, 1.0f, 0.0f},
+        .angularSpeed = 0.15f,
+        .albedo = {0.15f, 0.95f, 0.45f},
+        .metallic = 0.0f, .roughness = 0.15f, .ao = 1.0f
+    });
 
     // Populate batch manager from m_renderObjects for the Normal scene
     for (size_t i = 0; i < m_renderObjects.size(); ++i) {
@@ -1896,6 +2204,17 @@ void Renderer::destroySceneMeshes() noexcept {
     m_batchManager.clear();
     m_gpuInstances.clear();
     m_gpuBatches.clear();
+
+    m_icosphereLODs.clear();
+    m_gearLODs.clear();
+    m_torusLODs.clear();
+    m_torusKnotLODs.clear();
+    m_turbineLODs.clear();
+    m_sphereLODs.clear();
+    m_pyramidLODs.clear();
+    m_cubeLODs.clear();
+    m_lodManager.clear();
+
     m_turbineMesh.reset();
     m_torusKnotMesh.reset();
     m_torusMesh.reset();

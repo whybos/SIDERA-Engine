@@ -1,4 +1,5 @@
 #include "renderer/Mesh.h"
+#include "lod/MeshSimplifier.h"
 #include "core/Log.h"
 
 #include <glm/geometric.hpp>
@@ -39,6 +40,9 @@ Mesh::Mesh(const VulkanDevice& device,
         maxDistSq = std::max(maxDistSq, glm::dot(diff, diff));
     }
     m_localSphere.radius = std::sqrt(maxDistSq);
+
+    m_cpuVertices = vertices;
+    m_cpuIndices = indices;
 
     const VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertices.size();
     const VkDeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();
@@ -307,6 +311,38 @@ std::unique_ptr<Mesh> Mesh::createSphere(const VulkanDevice& device,
     }
 
     return std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, "SphereMesh");
+}
+
+
+std::unique_ptr<Mesh> Mesh::createSimplifiedLOD(
+    const VulkanDevice& device,
+    VkCommandPool transferCommandPool,
+    float targetRatio,
+    std::string_view name
+) const {
+    if (m_cpuVertices.empty() || m_cpuIndices.empty()) {
+        SIDERA_LOG_WARN("Mesh", "Cannot simplify mesh '{}': CPU vertex data unavailable.", m_name);
+        return nullptr;
+    }
+
+    SimplificationOptions opts{};
+    opts.targetRatio = targetRatio;
+
+    std::vector<Vertex> simpVertices;
+    std::vector<uint32_t> simpIndices;
+    const SimplificationResult res = MeshSimplifier::simplify(
+        m_cpuVertices,
+        m_cpuIndices,
+        opts,
+        simpVertices,
+        simpIndices
+    );
+
+    const std::string lodName = name.empty()
+        ? std::format("{}_LOD_{:.0f}", m_name, targetRatio * 100.0f)
+        : std::string(name);
+
+    return std::make_unique<Mesh>(device, transferCommandPool, simpVertices, simpIndices, lodName);
 }
 
 } // namespace sidera
