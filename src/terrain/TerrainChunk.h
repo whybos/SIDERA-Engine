@@ -50,11 +50,13 @@ public:
     [[nodiscard]] uint64_t getCpuMemoryUsageBytes() const noexcept;
 
     [[nodiscard]] uint32_t getChunkId() const noexcept { return m_chunkId; }
+    [[nodiscard]] uint32_t getId() const noexcept { return m_chunkId; }
     [[nodiscard]] uint32_t getGridX() const noexcept { return m_gridX; }
     [[nodiscard]] uint32_t getGridZ() const noexcept { return m_gridZ; }
     [[nodiscard]] const Mesh* getMesh() const noexcept { return m_mesh.get(); }
     [[nodiscard]] const glm::mat4& getWorldTransform() const noexcept { return m_worldTransform; }
     [[nodiscard]] const AABB& getBoundingBox() const noexcept { return m_worldAabb; }
+    [[nodiscard]] const AABB& getBounds() const noexcept { return m_worldAabb; }
     [[nodiscard]] float getMinHeight() const noexcept { return m_minHeight; }
     [[nodiscard]] float getMaxHeight() const noexcept { return m_maxHeight; }
     [[nodiscard]] bool isVisible() const noexcept { return m_isVisible; }

@@ -42,6 +42,18 @@ struct AABB {
         return AABB{glm::min(min, other.min), glm::max(max, other.max)};
     }
 
+    [[nodiscard]] constexpr bool intersects(const AABB& other) const noexcept {
+        return (min.x <= other.max.x && max.x >= other.min.x) &&
+               (min.y <= other.max.y && max.y >= other.min.y) &&
+               (min.z <= other.max.z && max.z >= other.min.z);
+    }
+
+    [[nodiscard]] constexpr bool contains(const glm::vec3& point) const noexcept {
+        return (point.x >= min.x && point.x <= max.x) &&
+               (point.y >= min.y && point.y <= max.y) &&
+               (point.z >= min.z && point.z <= max.z);
+    }
+
     // Transforms the AABB by an arbitrary 4x4 affine model matrix (translation, rotation, non-uniform scale)
     [[nodiscard]] AABB transform(const glm::mat4& m) const noexcept {
         const glm::vec3 center = getCenter();

@@ -29,6 +29,7 @@
 #include "foliage/FoliageSystem.h"
 #include "foliage/FoliageRenderer.h"
 #include "streaming/WorldStreamingManager.h"
+#include "partition/WorldPartitionManager.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -270,6 +271,14 @@ public:
     void toggleStreaming() noexcept;
     void forceReloadStreaming() noexcept;
 
+    // World Partition System (Milestone 22)
+    [[nodiscard]] WorldPartitionManager* getWorldPartitionManager() noexcept { return m_worldPartitionManager.get(); }
+    [[nodiscard]] const WorldPartitionManager* getWorldPartitionManager() const noexcept { return m_worldPartitionManager.get(); }
+    [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
+    [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
+    void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
+    void togglePartitionDebug() noexcept { m_partitionDebugVisible = !m_partitionDebugVisible; }
+
 private:
     void createCameraDescriptorResources();
     void updateShadowDescriptorSets();
@@ -328,6 +337,7 @@ private:
 
     std::unique_ptr<GraphicsPipeline> m_pipeline;
     std::unique_ptr<GraphicsPipeline> m_pipelineWireframe;
+    std::unique_ptr<GraphicsPipeline> m_pipelineDebugWireframe;
 
     // Dedicated depth-only shadow pipeline
     VkPipelineLayout m_shadowPipelineLayout = VK_NULL_HANDLE;
@@ -435,6 +445,10 @@ private:
 
     // World Streaming System (Milestone 21)
     std::unique_ptr<WorldStreamingManager> m_worldStreamingManager;
+
+    // World Partition System (Milestone 22)
+    std::unique_ptr<WorldPartitionManager> m_worldPartitionManager;
+    bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

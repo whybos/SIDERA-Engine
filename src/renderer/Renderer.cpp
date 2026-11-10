@@ -154,6 +154,19 @@ Renderer::Renderer(const VulkanContext& context,
             kFragShaderPath
         );
 
+        if (m_context.getDevice().isFillModeNonSolidSupported()) {
+            m_pipelineDebugWireframe = std::make_unique<GraphicsPipeline>(
+                m_context.getDevice().getLogicalDevice(),
+                m_swapchain->getImageFormat(),
+                m_depthBuffer->format(),
+                m_cameraDescriptorSetLayout,
+                kVertShaderPath,
+                kFragShaderPath,
+                VK_POLYGON_MODE_LINE,
+                VK_CULL_MODE_NONE
+            );
+        }
+
         createShadowPipeline();
         createGpuPipelines(); // optional; leaves GPU-driven mode unavailable on failure
         createSceneMeshes();
@@ -167,6 +180,7 @@ Renderer::Renderer(const VulkanContext& context,
         destroyShadowPipeline();
         m_pipeline.reset();
         m_pipelineWireframe.reset();
+        m_pipelineDebugWireframe.reset();
         destroyCameraDescriptorResources();
         m_iblMaps = {};
         m_albedoTexture.reset();
@@ -287,6 +301,11 @@ void Renderer::updateScene(float deltaTime) noexcept {
     // 1.5 World Streaming subsystem update (Milestone 21)
     if (m_worldStreamingManager && m_worldStreamingManager->isEnabled()) {
         m_worldStreamingManager->update(deltaTime, m_camera);
+    }
+
+    // 1.6 World Partition subsystem update (Milestone 22)
+    if (m_worldPartitionManager && m_worldPartitionManager->isEnabled()) {
+        m_worldPartitionManager->update(deltaTime, m_camera);
     }
 
     // 2. Foliage subsystem update (Milestone 20)
@@ -1752,6 +1771,25 @@ void Renderer::createSceneMeshes() {
     );
 
     // -----------------------------------------------------------------
+    // WORLD PARTITION SYSTEM (Milestone 22)
+    // -----------------------------------------------------------------
+    m_worldPartitionManager = std::make_unique<WorldPartitionManager>();
+    WorldPartitionConfig partConfig{};
+    partConfig.enabled = true;
+    partConfig.debugVisualization = false;
+    partConfig.cellSize = streamConfig.regionSize;
+    partConfig.loadRadius = streamConfig.loadRadius;
+    partConfig.unloadRadius = streamConfig.unloadRadius;
+    partConfig.hysteresisMargin = streamConfig.hysteresisMargin;
+    partConfig.macroCellFactor = 2;
+    m_worldPartitionManager->init(
+        partConfig,
+        m_worldStreamingManager.get(),
+        m_terrain.get(),
+        m_foliageSystem.get()
+    );
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2162,6 +2200,18 @@ void Renderer::createSceneMeshes() {
         inst.rotationAxis = obj.rotationAxis;
         inst.rotationRadians = obj.rotationRadians;
         m_batchManager.addInstance(obj.mesh, mat, inst);
+
+        if (m_worldPartitionManager && obj.mesh) {
+            const AABB worldBounds = obj.mesh->getLocalAABB().transform(obj.computeModelMatrix());
+            m_worldPartitionManager->registerObject(
+                std::string(obj.mesh->getName()),
+                PartitionObjectType::RenderObject,
+                obj.position,
+                worldBounds,
+                const_cast<void*>(reinterpret_cast<const void*>(&obj)),
+                obj.mesh->getGpuMemoryUsageBytes()
+            );
+        }
     }
 
     if (m_foliageRenderer && m_foliageSystem && m_foliageSystem->getConfig().enabled) {
@@ -2269,6 +2319,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_worldPartitionManager.reset();
     if (m_worldStreamingManager) {
         m_worldStreamingManager->shutdown();
         m_worldStreamingManager.reset();
@@ -2663,6 +2714,53 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             );
             m_mainApiDrawCalls += m_terrain->getStats().mainDrawCalls;
         }
+
+        // -------------------------------------------------------------
+        // Draw World Partition Debug Visualization (Milestone 22)
+        // -------------------------------------------------------------
+        if (m_partitionDebugVisible && m_worldPartitionManager && m_cubeMesh) {
+            VkPipeline dbgPipeline = m_pipelineDebugWireframe ? m_pipelineDebugWireframe->getHandle() : m_pipeline->getHandle();
+            VkPipelineLayout dbgLayout = m_pipelineDebugWireframe ? m_pipelineDebugWireframe->getLayout() : m_pipeline->getLayout();
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dbgPipeline);
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                dbgLayout,
+                0,
+                1,
+                &m_cameraDescriptorSets[m_currentFrame],
+                0,
+                nullptr
+            );
+
+            m_cubeMesh->bind(cmd);
+
+            const auto boxes = m_worldPartitionManager->getDebugCellBoxes();
+            for (const auto& box : boxes) {
+                const glm::vec3 center = box.bounds.getCenter();
+                const glm::vec3 size = glm::max(glm::vec3(0.5f), box.bounds.max - box.bounds.min);
+                const glm::mat4 model = glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
+
+                const MeshPushConstants pushData{
+                    .model = model,
+                    .albedoMetallic = box.color,
+                    .roughnessAoTex = glm::vec4(0.5f, 1.0f, 0.0f, 0.0f),
+                    .viewportParams = vpParams
+                };
+
+                vkCmdPushConstants(
+                    cmd,
+                    dbgLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    sizeof(MeshPushConstants),
+                    &pushData
+                );
+
+                m_cubeMesh->draw(cmd);
+                ++m_mainApiDrawCalls;
+            }
+        }
     }
 
     vkCmdEndRendering(cmd);
@@ -2798,6 +2896,18 @@ void Renderer::recreateSwapchain(Window& window) {
                 kFragShaderPath
             );
         }
+        if (m_context.getDevice().isFillModeNonSolidSupported()) {
+            m_pipelineDebugWireframe = std::make_unique<GraphicsPipeline>(
+                m_context.getDevice().getLogicalDevice(),
+                m_swapchain->getImageFormat(),
+                m_depthBuffer->format(),
+                m_cameraDescriptorSetLayout,
+                kVertShaderPath,
+                kFragShaderPath,
+                VK_POLYGON_MODE_LINE,
+                VK_CULL_MODE_NONE
+            );
+        }
     }
 
     window.resetResizedFlag();
@@ -2894,6 +3004,11 @@ void Renderer::forceReloadStreaming() noexcept {
         m_worldStreamingManager->forceUnloadAll();
         m_worldStreamingManager->forceLoadAll();
     }
+}
+
+const WorldPartitionStats& Renderer::getPartitionStats() const noexcept {
+    static const WorldPartitionStats s_empty{};
+    return m_worldPartitionManager ? m_worldPartitionManager->getStats() : s_empty;
 }
 
 } // namespace sidera

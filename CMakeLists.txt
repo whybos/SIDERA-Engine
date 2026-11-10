@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.21.0
+    VERSION 0.22.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -281,6 +281,16 @@ set(SIDERA_SOURCES
     src/streaming/StreamingUploadQueue.cpp
     src/streaming/WorldStreamingManager.h
     src/streaming/WorldStreamingManager.cpp
+    src/partition/WorldPartitionConfig.h
+    src/partition/WorldPartitionStats.h
+    src/partition/WorldPartitionGrid.h
+    src/partition/WorldPartitionObject.h
+    src/partition/WorldPartitionCell.h
+    src/partition/WorldPartitionCell.cpp
+    src/partition/WorldPartition.h
+    src/partition/WorldPartition.cpp
+    src/partition/WorldPartitionManager.h
+    src/partition/WorldPartitionManager.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -666,6 +676,101 @@ else()
 endif()
 
 target_link_libraries(test_world_streaming
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# ------------------------------------------------------------------------------
+# Test Target: test_world_partition (Milestone 22)
+# ------------------------------------------------------------------------------
+add_executable(test_world_partition
+    tests/test_world_partition.cpp
+    tests/stb_image_impl.cpp
+    src/partition/WorldPartitionConfig.h
+    src/partition/WorldPartitionStats.h
+    src/partition/WorldPartitionGrid.h
+    src/partition/WorldPartitionObject.h
+    src/partition/WorldPartitionCell.h
+    src/partition/WorldPartitionCell.cpp
+    src/partition/WorldPartition.h
+    src/partition/WorldPartition.cpp
+    src/partition/WorldPartitionManager.h
+    src/partition/WorldPartitionManager.cpp
+    src/streaming/StreamingState.h
+    src/streaming/StreamingConfig.h
+    src/streaming/StreamingStats.h
+    src/streaming/StreamingSource.h
+    src/streaming/StreamingRegion.h
+    src/streaming/StreamingRegion.cpp
+    src/streaming/StreamingUploadQueue.h
+    src/streaming/StreamingUploadQueue.cpp
+    src/streaming/WorldStreamingManager.h
+    src/streaming/WorldStreamingManager.cpp
+    src/terrain/Terrain.h
+    src/terrain/Terrain.cpp
+    src/terrain/TerrainChunk.h
+    src/terrain/TerrainChunk.cpp
+    src/terrain/HeightmapData.h
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainMaterial.h
+    src/terrain/TerrainMaterial.cpp
+    src/foliage/FoliageSystem.h
+    src/foliage/FoliageSystem.cpp
+    src/renderer/Mesh.h
+    src/renderer/Mesh.cpp
+    src/renderer/Camera.h
+    src/renderer/Camera.cpp
+    src/renderer/Frustum.h
+    src/renderer/InstanceBatch.h
+    src/renderer/InstanceBatch.cpp
+    src/renderer/InstanceData.h
+    src/lod/LODGroup.h
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.h
+    src/lod/LODManager.cpp
+    src/lod/MeshSimplifier.h
+    src/lod/MeshSimplifier.cpp
+    src/core/Log.h
+    src/core/Log.cpp
+    src/core/Window.h
+    src/core/Window.cpp
+    src/renderer/TextureManager.h
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/SamplerManager.h
+    src/renderer/vulkan/SamplerManager.cpp
+    src/renderer/vulkan/VulkanTexture.h
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.h
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/VulkanBuffer.h
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.h
+    src/renderer/vulkan/VulkanDevice.cpp
+)
+
+target_include_directories(test_world_partition
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_world_partition
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_world_partition PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_world_partition PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_world_partition PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_world_partition
     PRIVATE
         Vulkan::Vulkan
         glfw

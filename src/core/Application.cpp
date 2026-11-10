@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.21.0";
+constexpr std::string_view kEngineVersion = "v0.22.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -44,6 +44,18 @@ Application::Application(const ApplicationConfig& config)
         cfg.unloadRadius = m_config.streamUnloadRadius;
         cfg.validate();
         streamMgr->setConfig(cfg);
+    }
+    m_renderer.setPartitionDebugVisible(m_config.partitionDebug);
+    if (auto* partMgr = m_renderer.getWorldPartitionManager()) {
+        auto pcfg = partMgr->getConfig();
+        pcfg.debugVisualization = m_config.partitionDebug;
+        if (m_config.partitionCellSize > 0.0f) {
+            pcfg.cellSize = m_config.partitionCellSize;
+        }
+        pcfg.loadRadius = m_config.streamLoadRadius;
+        pcfg.unloadRadius = m_config.streamUnloadRadius;
+        pcfg.validate();
+        partMgr->setConfig(pcfg);
     }
     if (m_config.showHiZ) {
         m_renderer.setCullingDebugMode(1);
@@ -246,9 +258,16 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         streamInfo = " | STREAMING: OFF";
     }
 
+    const auto partStats = m_renderer.getPartitionStats();
+    const std::string partInfo = std::format(" | PARTITION: Act:{}/Res:{}/Tot:{} (Grid:{})",
+                                             partStats.activeCells,
+                                             partStats.loadedCells,
+                                             partStats.totalCells,
+                                             m_renderer.isPartitionDebugVisible() ? "ON" : "OFF");
+
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}{}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}{}{}{}",
         kEngineVersion,
         isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
@@ -266,7 +285,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         vpInfo,
         lodInfo,
         foliageInfo,
-        streamInfo
+        streamInfo,
+        partInfo
     );
     m_window.setTitle(title);
 
@@ -281,9 +301,10 @@ Application::~Application() {
 
 void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
-    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.21.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.22.0 — Runtime Controls Guide:");
     SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
     SIDERA_LOG_INFO("Core", "  [World Streaming]  F1 = Toggle World Streaming ON/OFF, U = Force Reload Streaming");
+    SIDERA_LOG_INFO("Core", "  [World Partition]  G = Toggle World Partition Debug Grid (Green=Active, Cyan=Resident, Yellow=Loading, Orange=Unloading, Gray=Unloaded)");
     SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
     SIDERA_LOG_INFO("Core", "  [Performance]      F4 = 60 FPS Limiter, F5 = High-Poly Stress Test");
@@ -300,7 +321,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F1 streaming, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, O Foliage, P Wind, U Reload Streaming, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F1 streaming, G partition dbg, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, O Foliage, P Wind, U Reload Streaming, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -336,6 +357,7 @@ void Application::run() {
     bool kWasDown = false;
     bool oWasDown = false;
     bool pWasDown = false;
+    bool gWasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -364,11 +386,18 @@ void Application::run() {
         const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
         const bool uDown = m_window.isKeyPressed(GLFW_KEY_U);
+        const bool gDown = m_window.isKeyPressed(GLFW_KEY_G);
 
         if (f1Down && !f1WasDown) {
             m_renderer.toggleStreaming();
             m_frameStats.reset();
             SIDERA_LOG_INFO("Core", "World Streaming toggled: {}.", m_renderer.isStreamingEnabled() ? "ENABLED" : "DISABLED");
+        }
+        if (gDown && !gWasDown) {
+            m_renderer.togglePartitionDebug();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "World Partition Debug Grid toggled: {}.",
+                            m_renderer.isPartitionDebugVisible() ? "ENABLED" : "DISABLED");
         }
         if (uDown && !uWasDown) {
             m_renderer.forceReloadStreaming();
@@ -497,6 +526,7 @@ void Application::run() {
         bWasDown = bDown;
         tWasDown = tDown;
         uWasDown = uDown;
+        gWasDown = gDown;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

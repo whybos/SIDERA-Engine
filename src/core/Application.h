@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.21.0 - World Streaming",
+        .title = "SIDERA Engine v0.22.0 - World Partition",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -29,6 +29,8 @@ struct ApplicationConfig {
     bool streamingEnabled = true;  // --streaming / --no-streaming
     float streamLoadRadius = 65.0f;   // --stream-load-radius <val>
     float streamUnloadRadius = 115.0f; // --stream-unload-radius <val>
+    bool partitionDebug = false;   // --partition-debug: enable World Partition debug visualization
+    float partitionCellSize = 30.0f; // --partition-cell-size <val>
     bool terrainEnabled = true;    // --terrain / --no-terrain
     std::string heightmapPath = ""; // --heightmap <path>
     bool lodEnabled = true;        // --lod / --no-lod

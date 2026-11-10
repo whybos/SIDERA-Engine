@@ -156,11 +156,17 @@ int main(int argc, char* argv[]) {
             config.streamLoadRadius = std::strtof(argv[++i], nullptr);
         } else if (arg == "--stream-unload-radius" && i + 1 < argc) {
             config.streamUnloadRadius = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--partition-debug") {
+            config.partitionDebug = true;
+        } else if (arg == "--no-partition-debug") {
+            config.partitionDebug = false;
+        } else if (arg == "--partition-cell-size" && i + 1 < argc) {
+            config.partitionCellSize = std::strtof(argv[++i], nullptr);
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.21.0 (Milestone 21: World Streaming)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.22.0 (Milestone 22: World Partition)...");
         {
             sidera::Application app(config);
             app.run();
