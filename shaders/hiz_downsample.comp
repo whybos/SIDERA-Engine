@@ -1,0 +1,30 @@
+#version 450
+
+// Hi-Z Pyramid Downsampling: Generates Mip k from Mip k-1 using 2x2 max-reduction.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uInMip;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D uOutMip;
+
+layout(push_constant) uniform PushConstants {
+    vec2 outSize;
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (float(coord.x) >= pc.outSize.x || float(coord.y) >= pc.outSize.y) {
+        return;
+    }
+
+    ivec2 srcCoord = coord * 2;
+
+    float d0 = texelFetch(uInMip, srcCoord + ivec2(0, 0), 0).r;
+    float d1 = texelFetch(uInMip, srcCoord + ivec2(1, 0), 0).r;
+    float d2 = texelFetch(uInMip, srcCoord + ivec2(0, 1), 0).r;
+    float d3 = texelFetch(uInMip, srcCoord + ivec2(1, 1), 0).r;
+
+    float maxDepth = max(max(d0, d1), max(d2, d3));
+
+    imageStore(uOutMip, coord, vec4(maxDepth, 0.0, 0.0, 0.0));
+}

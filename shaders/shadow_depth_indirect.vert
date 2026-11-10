@@ -25,6 +25,9 @@ struct GpuObjectData {
     vec4 albedoMetallic;
     vec4 roughnessAoTex;
     uvec4 meshInfo;
+    vec4 boundingSphere;
+    vec4 aabbMin;
+    vec4 aabbMax;
 };
 
 layout(std430, set = 0, binding = 6) readonly buffer ObjectBuffer {

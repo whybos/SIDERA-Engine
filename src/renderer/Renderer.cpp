@@ -26,6 +26,20 @@ glm::mat4 RenderObject::computeModelMatrix() const noexcept {
     return model;
 }
 
+AABB RenderObject::computeWorldAABB() const noexcept {
+    if (!mesh) {
+        return AABB{.min = position, .max = position};
+    }
+    return mesh->getLocalAABB().transform(computeModelMatrix());
+}
+
+BoundingSphere RenderObject::computeWorldBoundingSphere() const noexcept {
+    if (!mesh) {
+        return BoundingSphere{.center = position, .radius = 0.0f};
+    }
+    return mesh->getLocalBoundingSphere().transform(computeModelMatrix());
+}
+
 namespace {
 constexpr const char* kVertShaderPath = "shaders/triangle.vert.spv";
 constexpr const char* kFragShaderPath = "shaders/triangle.frag.spv";
@@ -121,6 +135,9 @@ Renderer::Renderer(const VulkanContext& context,
         createTimestampResources();
         m_albedoTexture = VulkanTexture::createProceduralTestTexture(m_context.getDevice(), m_commandPools[0], 256, 256);
         m_iblMaps = IBLBuilder::build(m_context.getDevice(), m_commandPools[0]);
+        for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+            m_hizBuffers[i] = std::make_unique<VulkanHiZBuffer>(m_context.getDevice(), 1024, 512);
+        }
         createGpuScene(); // optional; leaves GPU-driven mode unavailable on failure
         createCameraDescriptorResources();
 
@@ -137,6 +154,10 @@ Renderer::Renderer(const VulkanContext& context,
         createGpuPipelines(); // optional; leaves GPU-driven mode unavailable on failure
         createSceneMeshes();
     } catch (...) {
+        for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+            m_hizBuffers[i].reset();
+            m_hizValid[i] = false;
+        }
         destroySceneMeshes();
         destroyGpuResources();
         destroyShadowPipeline();
@@ -191,6 +212,10 @@ Renderer::~Renderer() {
 
     m_context.waitIdle();
 
+    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+        m_hizBuffers[i].reset();
+        m_hizValid[i] = false;
+    }
     destroySceneMeshes();
     destroyGpuResources();
     destroyShadowPipeline();
@@ -229,6 +254,9 @@ void Renderer::drawFrame(Window& window) {
     // 1. Wait until the GPU has finished executing the previous frame using this slot
     m_frameSync->waitForFrameFence(m_currentFrame);
     collectGpuTimestamps(m_currentFrame);
+    if (m_gpuScene) {
+        m_lastCullingStats = m_gpuScene->readCullingStats(m_currentFrame);
+    }
 
     // 2. Acquire the next image from the swapchain
     uint32_t imageIndex = 0;
@@ -333,14 +361,22 @@ void Renderer::createCameraDescriptorResources() {
     objectLayoutBinding.descriptorCount = 1;
     objectLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 7> bindings = {
+    // Binding 7: Hi-Z map (for debug visualization in fragment shader)
+    VkDescriptorSetLayoutBinding hizLayoutBinding{};
+    hizLayoutBinding.binding = 7;
+    hizLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    hizLayoutBinding.descriptorCount = 1;
+    hizLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const std::array<VkDescriptorSetLayoutBinding, 8> bindings = {
         uboLayoutBinding,
         samplerLayoutBinding,
         irradianceLayoutBinding,
         prefilteredLayoutBinding,
         brdfLutLayoutBinding,
         shadowLayoutBinding,
-        objectLayoutBinding
+        objectLayoutBinding,
+        hizLayoutBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -355,7 +391,7 @@ void Renderer::createCameraDescriptorResources() {
 
     const std::array<VkDescriptorPoolSize, 3> poolSizes = {{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 5},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 6},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFramesInFlight}
     }};
 
@@ -426,7 +462,12 @@ void Renderer::createCameraDescriptorResources() {
         shadowInfo.imageView = m_shadowMap->imageView();
         shadowInfo.sampler = m_shadowMap->sampler();
 
-        std::array<VkWriteDescriptorSet, 6> writes{};
+        VkDescriptorImageInfo hizInfo{};
+        hizInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        hizInfo.imageView = m_hizBuffers[i] ? m_hizBuffers[i]->sampledImageView() : m_albedoTexture->imageView();
+        hizInfo.sampler = m_hizBuffers[i] ? m_hizBuffers[i]->sampler() : m_albedoTexture->sampler();
+
+        std::array<VkWriteDescriptorSet, 7> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_cameraDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -468,6 +509,13 @@ void Renderer::createCameraDescriptorResources() {
         writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[5].descriptorCount = 1;
         writes[5].pImageInfo = &shadowInfo;
+
+        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet = m_cameraDescriptorSets[i];
+        writes[6].dstBinding = 7;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[6].descriptorCount = 1;
+        writes[6].pImageInfo = &hizInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
@@ -654,6 +702,30 @@ void Renderer::setCascadeCount(uint32_t count) {
 
 void Renderer::cycleShadowDebugMode() noexcept {
     m_shadowDebugMode = (m_shadowDebugMode + 1) % 5;
+}
+
+void Renderer::setFrustumCullingEnabled(bool enabled) noexcept {
+    m_frustumCullingEnabled = enabled;
+    SIDERA_LOG_INFO("Renderer", "Frustum culling: {}", enabled ? "ENABLED" : "DISABLED");
+}
+
+void Renderer::toggleFrustumCulling() noexcept {
+    setFrustumCullingEnabled(!m_frustumCullingEnabled);
+}
+
+void Renderer::setOcclusionCullingEnabled(bool enabled) noexcept {
+    m_occlusionCullingEnabled = enabled;
+    SIDERA_LOG_INFO("Renderer", "Occlusion culling: {}", enabled ? "ENABLED" : "DISABLED");
+}
+
+void Renderer::toggleOcclusionCulling() noexcept {
+    setOcclusionCullingEnabled(!m_occlusionCullingEnabled);
+}
+
+void Renderer::cycleCullingDebugMode() noexcept {
+    m_cullingDebugMode = (m_cullingDebugMode + 1) % 3;
+    const char* names[] = {"OFF", "FULLSCREEN HI-Z", "PIP HI-Z"};
+    SIDERA_LOG_INFO("Renderer", "Hi-Z debug view: {}", names[m_cullingDebugMode]);
 }
 
 void Renderer::createShadowPipeline() {
@@ -861,6 +933,11 @@ void Renderer::destroyGpuResources() noexcept {
         return;
     }
 
+    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+        m_hizBuffers[i].reset();
+        m_hizValid[i] = false;
+    }
+
     m_pipelineIndirect.reset();
 
     if (m_shadowIndirectPipeline != VK_NULL_HANDLE) {
@@ -909,6 +986,12 @@ void Renderer::uploadGpuObjects(uint32_t frameIndex) {
         data.albedoMetallic = glm::vec4(obj.albedo, obj.metallic);
         data.roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f);
         data.meshInfo = glm::uvec4(slotToBatch[slot], 1u, 0u, 0u);
+
+        const BoundingSphere sphere = obj.computeWorldBoundingSphere();
+        const AABB aabb = obj.computeWorldAABB();
+        data.boundingSphere = glm::vec4(sphere.center, sphere.radius);
+        data.aabbMin = glm::vec4(aabb.min, 0.0f);
+        data.aabbMax = glm::vec4(aabb.max, 0.0f);
     }
     m_gpuScene->uploadObjects(frameIndex, m_gpuSlotData);
 }
@@ -1058,11 +1141,18 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
         m_cascadeSplits[3]
     );
 
+    uint32_t activeDebugMode = m_shadowDebugMode;
+    if (m_cullingDebugMode == 1) {
+        activeDebugMode = 5; // fullscreen Hi-Z
+    } else if (m_cullingDebugMode == 2) {
+        activeDebugMode = 6; // PiP Hi-Z
+    }
+
     ubo.shadowParams = glm::vec4(
         m_shadowsEnabled ? 1.0f : 0.0f,
         m_shadowDepthBias,
         3.0f,
-        static_cast<float>(m_shadowDebugMode)
+        static_cast<float>(activeDebugMode)
     );
 
     ubo.cascadeParams = glm::vec4(
@@ -1081,6 +1171,49 @@ void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
     );
 
     m_cameraUniformBuffers[frameIndex]->uploadData(&ubo, sizeof(SceneUniformData), 0);
+
+    if (m_gpuScene) {
+        const glm::mat4 currentViewProj = m_camera.getProjectionMatrix() * m_camera.getViewMatrix();
+        const Frustum frustum = Frustum::fromViewProj(currentViewProj);
+
+        const glm::vec3 currentCamPos = m_camera.getPosition();
+        const float posDelta = glm::distance(currentCamPos, m_prevCameraPos);
+        const float yawDelta = std::abs(m_camera.getYawDegrees() - m_prevCameraYaw);
+        const float pitchDelta = std::abs(m_camera.getPitchDegrees() - m_prevCameraPitch);
+
+        // Temporal safeguard: invalidate Hi-Z if large camera translation or rotation
+        const bool cameraTeleported = (posDelta > 0.8f) || (yawDelta > 15.0f) || (pitchDelta > 15.0f);
+        if (cameraTeleported) {
+            m_hizValid.fill(false);
+        }
+
+        const uint32_t prevFrameIndex = (frameIndex + kMaxFramesInFlight - 1) % kMaxFramesInFlight;
+        const bool canUseHiZ = m_occlusionCullingEnabled && m_hizValid[prevFrameIndex] && !cameraTeleported && (m_renderedFrames > 2);
+        m_canUseHiZ = canUseHiZ;
+
+        CullingUniformData cullingData{};
+        cullingData.viewProj = currentViewProj;
+        cullingData.prevViewProj = m_prevViewProj;
+        for (int p = 0; p < 6; ++p) {
+            cullingData.frustumPlanes[p] = glm::vec4(frustum.planes[p].normal, frustum.planes[p].distance);
+        }
+        cullingData.cameraPos = glm::vec4(currentCamPos, 1.0f);
+
+        m_gpuScene->uploadCullingUniforms(frameIndex, cullingData);
+
+        if (m_hizBuffers[prevFrameIndex]) {
+            m_gpuScene->updateHiZDescriptor(
+                frameIndex,
+                m_hizBuffers[prevFrameIndex]->sampledImageView(),
+                m_hizBuffers[prevFrameIndex]->sampler()
+            );
+        }
+
+        m_prevViewProj = currentViewProj;
+        m_prevCameraPos = currentCamPos;
+        m_prevCameraYaw = m_camera.getYawDegrees();
+        m_prevCameraPitch = m_camera.getPitchDegrees();
+    }
 }
 
 uint32_t Renderer::getTriangleCount() const noexcept {
@@ -1500,7 +1633,7 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd) {
                 &cascadeIdx
             );
 
-            const uint32_t apiCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame);
+            const uint32_t apiCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame, true /* isShadow */);
             m_shadowApiDrawCalls += apiCalls;
             m_shadowDrawCalls += m_gpuScene->getObjectCount();
         } else {
@@ -1560,7 +1693,16 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     // 1. GPU-driven draw command generation (compute pass)
     if (isGpuDrivenActive()) {
-        m_gpuScene->recordGenerateCommands(cmd, m_currentFrame);
+        m_gpuScene->resetCullingStats(cmd, m_currentFrame);
+        m_gpuScene->recordGenerateCommands(
+            cmd,
+            m_currentFrame,
+            m_frustumCullingEnabled,
+            m_occlusionCullingEnabled,
+            m_canUseHiZ,
+            11,
+            glm::vec2(1024.0f, 512.0f)
+        );
         m_commandsGenerated = m_gpuScene->getCommandsGenerated();
     } else {
         m_commandsGenerated = 0;
@@ -1633,7 +1775,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     depthAttachment.imageView = m_depthBuffer->imageView();
     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
     VkRenderingInfo renderingInfo{};
@@ -1675,7 +1817,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             nullptr
         );
 
-        m_mainApiDrawCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame);
+        m_mainApiDrawCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame, false /* isShadow */);
         m_commandsSubmitted = m_gpuScene->getObjectCount();
     } else {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->getHandle());
@@ -1725,6 +1867,30 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     }
 
     vkCmdEndRendering(cmd);
+
+    // 4. Build Hierarchical Depth (Hi-Z) pyramid from m_depthBuffer
+    if (m_hizBuffers[m_currentFrame]) {
+        transitionImageLayout(
+            cmd,
+            m_depthBuffer->image(),
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+        );
+
+        m_hizBuffers[m_currentFrame]->build(
+            cmd,
+            m_depthBuffer->imageView(),
+            extent.width,
+            extent.height
+        );
+
+        m_hizValid[m_currentFrame] = true;
+    }
 
     // Timestamp 3: end of main pass
     if (m_timestampPool != VK_NULL_HANDLE) {
@@ -1800,6 +1966,7 @@ void Renderer::recreateSwapchain(Window& window) {
     const VkExtent2D newExtent = m_swapchain->getExtent();
 
     m_depthBuffer->recreate(newExtent.width, newExtent.height);
+    m_hizValid.fill(false);
     m_frameSync->resizeRenderFinishedSemaphores(m_swapchain->getImageCount());
 
     m_camera.setViewportSize(newExtent.width, newExtent.height);

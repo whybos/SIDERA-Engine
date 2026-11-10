@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.14.0
+    VERSION 0.15.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -127,6 +127,8 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_indirect.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_depth_indirect.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gen_draw_commands.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hiz_generate.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hiz_downsample.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_convolution.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_cubemap.comp
@@ -179,6 +181,8 @@ set(SIDERA_SOURCES
     src/core/Application.h
     src/core/Application.cpp
     src/renderer/Vertex.h
+    src/renderer/BoundingVolume.h
+    src/renderer/Frustum.h
     src/renderer/Mesh.h
     src/renderer/Mesh.cpp
     src/renderer/ProceduralMeshes.h
@@ -198,6 +202,8 @@ set(SIDERA_SOURCES
     src/renderer/vulkan/VulkanSwapchain.cpp
     src/renderer/vulkan/VulkanDepthBuffer.h
     src/renderer/vulkan/VulkanDepthBuffer.cpp
+    src/renderer/vulkan/VulkanHiZBuffer.h
+    src/renderer/vulkan/VulkanHiZBuffer.cpp
     src/renderer/vulkan/VulkanShadowMap.h
     src/renderer/vulkan/VulkanShadowMap.cpp
     src/renderer/GpuDrivenScene.h

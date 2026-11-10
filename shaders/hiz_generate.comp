@@ -1,0 +1,36 @@
+#version 450
+
+// Hi-Z Pyramid Generation (Pass 0): Downsamples scene depth into Hi-Z Mip 0.
+// Uses max-reduction because Vulkan depth is 0.0 at near and 1.0 at far,
+// so maximum depth represents the furthest occluder in the cell.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uSceneDepth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D uOutHiZMip;
+
+layout(push_constant) uniform PushConstants {
+    vec2 outSize;
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (float(coord.x) >= pc.outSize.x || float(coord.y) >= pc.outSize.y) {
+        return;
+    }
+
+    // Normalized UVs corresponding to center of out texel
+    vec2 invSize = 1.0 / pc.outSize;
+    vec2 uv = (vec2(coord) + vec2(0.5)) * invSize;
+
+    // Sample a 2x2 footprint of the scene depth buffer
+    vec2 offset = 0.25 * invSize;
+    float d0 = texture(uSceneDepth, uv + vec2(-offset.x, -offset.y)).r;
+    float d1 = texture(uSceneDepth, uv + vec2( offset.x, -offset.y)).r;
+    float d2 = texture(uSceneDepth, uv + vec2(-offset.x,  offset.y)).r;
+    float d3 = texture(uSceneDepth, uv + vec2( offset.x,  offset.y)).r;
+
+    float maxDepth = max(max(d0, d1), max(d2, d3));
+
+    imageStore(uOutHiZMip, coord, vec4(maxDepth, 0.0, 0.0, 0.0));
+}

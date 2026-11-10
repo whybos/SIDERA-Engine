@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace sidera {
@@ -20,6 +21,24 @@ Mesh::Mesh(const VulkanDevice& device,
     if (vertices.empty() || indices.empty()) {
         throw std::invalid_argument("Mesh requires non-empty vertices and indices.");
     }
+
+    // Compute local-space AABB and Bounding Sphere from vertex positions
+    glm::vec3 minAabb(std::numeric_limits<float>::max());
+    glm::vec3 maxAabb(std::numeric_limits<float>::lowest());
+    for (const auto& v : vertices) {
+        minAabb = glm::min(minAabb, v.position);
+        maxAabb = glm::max(maxAabb, v.position);
+    }
+    m_localAabb.min = minAabb;
+    m_localAabb.max = maxAabb;
+
+    m_localSphere.center = (minAabb + maxAabb) * 0.5f;
+    float maxDistSq = 0.0f;
+    for (const auto& v : vertices) {
+        const glm::vec3 diff = v.position - m_localSphere.center;
+        maxDistSq = std::max(maxDistSq, glm::dot(diff, diff));
+    }
+    m_localSphere.radius = std::sqrt(maxDistSq);
 
     const VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertices.size();
     const VkDeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();

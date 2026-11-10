@@ -24,6 +24,7 @@ public:
     VulkanBuffer& operator=(VulkanBuffer&& other) noexcept;
 
     void uploadData(const void* srcData, VkDeviceSize size, VkDeviceSize offset = 0);
+    void downloadData(void* dstData, VkDeviceSize size, VkDeviceSize offset = 0);
 
     [[nodiscard]] static std::unique_ptr<VulkanBuffer> createDeviceLocalBuffer(
         const VulkanDevice& device,

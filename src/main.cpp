@@ -59,11 +59,21 @@ int main(int argc, char* argv[]) {
             config.renderMode = sidera::RenderMode::Gpu;
         } else if (arg == "--cpu-driven" || arg == "--cpu") {
             config.renderMode = sidera::RenderMode::Cpu;
+        } else if (arg == "--frustum-culling") {
+            config.frustumCulling = true;
+        } else if (arg == "--no-frustum-culling") {
+            config.frustumCulling = false;
+        } else if (arg == "--occlusion-culling") {
+            config.occlusionCulling = true;
+        } else if (arg == "--no-occlusion-culling") {
+            config.occlusionCulling = false;
+        } else if (arg == "--show-hiz") {
+            config.showHiZ = true;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.14.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.15.0...");
         {
             sidera::Application app(config);
             app.run();

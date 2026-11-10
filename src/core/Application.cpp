@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.14.0";
+constexpr std::string_view kEngineVersion = "v0.15.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -26,6 +26,11 @@ Application::Application(const ApplicationConfig& config)
                  m_config.renderMode)
     , m_baseTitle(m_config.window.title) {
     m_renderer.setCascadeLambda(m_config.cascadeLambda);
+    m_renderer.setFrustumCullingEnabled(m_config.frustumCulling);
+    m_renderer.setOcclusionCullingEnabled(m_config.occlusionCulling);
+    if (m_config.showHiZ) {
+        m_renderer.setCullingDebugMode(1);
+    }
     m_statsEnabled = m_config.startWithStats;
     m_limiterEnabled = m_config.targetFps > 0.0f;
     if (m_config.stressTest) {
@@ -70,14 +75,26 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
 
     const bool isGpu = (m_renderer.getRenderMode() == RenderMode::Gpu);
     const RendererTimings timings = m_renderer.consumeTimings();
+    const auto& cs = m_renderer.getLastCullingStats();
 
     std::string drawsInfo;
+    std::string cullingInfo;
     if (isGpu) {
-        drawsInfo = std::format("{} API draws [{} objs] (+{} shd), {} tris",
+        drawsInfo = std::format("{} API draws [{} objs, vis {}, culled {}(F:{},O:{})] (+{} shd), {} tris",
                                 m_renderer.getMainApiDrawCallCount(),
                                 m_renderer.getGpuObjectsProcessed(),
+                                cs.finalVisible,
+                                cs.frustumCulled + cs.occlusionCulled,
+                                cs.frustumCulled,
+                                cs.occlusionCulled,
                                 m_renderer.getShadowApiDrawCallCount(),
                                 m_renderer.getTriangleCount());
+        cullingInfo = std::format(" | Culling: F:{} O:{}",
+                                  m_renderer.isFrustumCullingEnabled() ? "ON" : "OFF",
+                                  m_renderer.isOcclusionCullingEnabled() ? "ON" : "OFF");
+        if (m_renderer.getCullingDebugMode() > 0) {
+            cullingInfo += (m_renderer.getCullingDebugMode() == 1 ? " [Hi-Z FULL]" : " [Hi-Z PIP]");
+        }
     } else {
         drawsInfo = std::format("{} draws (+{} shadow), {} tris",
                                 m_renderer.getMainApiDrawCallCount(),
@@ -106,7 +123,7 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
 
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{} | limiter {}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}",
         kEngineVersion,
         isGpu ? "GPU-DRIVEN" : "CPU-DRIVEN",
         r.fps,
@@ -115,6 +132,7 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         r.onePercentLowFps,
         extent.width, extent.height, presentMode,
         drawsInfo,
+        cullingInfo,
         timingStr,
         m_renderer.isShadowsEnabled() ? std::format(" | {}", shadowInfo) : "",
         m_limiterEnabled ? "ON" : "OFF",
@@ -134,7 +152,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -152,6 +170,9 @@ void Application::run() {
     bool f6WasDown = false;
     bool f7WasDown = false;
     bool f8WasDown = false;
+    bool f9WasDown = false;
+    bool f10WasDown = false;
+    bool f11WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -160,14 +181,16 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F3: toggle performance stats. F4: toggle frame limiter. F5: toggle high-poly stress-test mode.
-        // F6: toggle real-time shadows. F7: cycle shadow debug visualization modes. F8: toggle GPU/CPU submission mode.
+        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
         const bool f6Down = m_window.isKeyPressed(GLFW_KEY_F6);
         const bool f7Down = m_window.isKeyPressed(GLFW_KEY_F7);
         const bool f8Down = m_window.isKeyPressed(GLFW_KEY_F8);
+        const bool f9Down = m_window.isKeyPressed(GLFW_KEY_F9);
+        const bool f10Down = m_window.isKeyPressed(GLFW_KEY_F10);
+        const bool f11Down = m_window.isKeyPressed(GLFW_KEY_F11);
 
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
@@ -214,12 +237,27 @@ void Application::run() {
             SIDERA_LOG_INFO("Core", "Rendering submission switched: {}.",
                             m_renderer.getRenderMode() == RenderMode::Gpu ? "GPU-DRIVEN (indirect)" : "CPU-DRIVEN (direct)");
         }
+        if (f9Down && !f9WasDown) {
+            m_renderer.toggleFrustumCulling();
+            m_frameStats.reset();
+        }
+        if (f10Down && !f10WasDown) {
+            m_renderer.toggleOcclusionCulling();
+            m_frameStats.reset();
+        }
+        if (f11Down && !f11WasDown) {
+            m_renderer.cycleCullingDebugMode();
+            m_frameStats.reset();
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
         f6WasDown = f6Down;
         f7WasDown = f7Down;
         f8WasDown = f8Down;
+        f9WasDown = f9Down;
+        f10WasDown = f10Down;
+        f11WasDown = f11Down;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

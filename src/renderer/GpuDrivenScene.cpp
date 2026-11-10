@@ -6,6 +6,7 @@
 #include "renderer/vulkan/VulkanShader.h"
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -18,12 +19,15 @@ constexpr uint32_t kGenCommandsLocalSize = 64; // must match local_size_x in gen
 struct GenCommandsPushConstants {
     uint32_t objectCount;
     uint32_t meshCount;
+    uint32_t frustumCullingEnabled;
+    uint32_t occlusionCullingEnabled;
+    uint32_t hizValid;
+    uint32_t hizMipLevels;
+    glm::vec2 hizSize;
 };
 } // namespace
 
 bool GpuDrivenScene::isSupported(const VulkanDevice& device) noexcept {
-    // Per-object data is addressed through firstInstance (gl_InstanceIndex). Without
-    // drawIndirectFirstInstance, non-zero firstInstance values are not allowed in indirect commands.
     return device.isDrawIndirectFirstInstanceEnabled();
 }
 
@@ -47,11 +51,34 @@ GpuDrivenScene::GpuDrivenScene(const VulkanDevice& device, uint32_t framesInFlig
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
             ));
 
-            m_commandBuffers.push_back(std::make_unique<VulkanBuffer>(
+            m_mainCommandBuffers.push_back(std::make_unique<VulkanBuffer>(
                 m_device,
                 sizeof(VkDrawIndexedIndirectCommand) * kMaxObjects,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            ));
+
+            m_shadowCommandBuffers.push_back(std::make_unique<VulkanBuffer>(
+                m_device,
+                sizeof(VkDrawIndexedIndirectCommand) * kMaxObjects,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            ));
+
+            m_cullingUniformBuffers.push_back(std::make_unique<VulkanBuffer>(
+                m_device,
+                sizeof(CullingUniformData),
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+            ));
+
+            m_cullingStatsBuffers.push_back(std::make_unique<VulkanBuffer>(
+                m_device,
+                sizeof(CullingStats),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
             ));
         }
 
@@ -71,7 +98,7 @@ GpuDrivenScene::GpuDrivenScene(const VulkanDevice& device, uint32_t framesInFlig
 
     SIDERA_LOG_INFO(
         "GpuDriven",
-        "GPU-driven scene initialized (capacity: {} objects / {} mesh batches, multiDrawIndirect: {}, "
+        "GPU-driven visibility scene initialized (capacity: {} objects / {} mesh batches, multiDrawIndirect: {}, "
         "maxDrawIndirectCount: {}, {} frames in flight).",
         kMaxObjects,
         kMaxMeshes,
@@ -82,10 +109,12 @@ GpuDrivenScene::GpuDrivenScene(const VulkanDevice& device, uint32_t framesInFlig
 }
 
 GpuDrivenScene::~GpuDrivenScene() {
-    // The owner (Renderer) waits for the device to be idle before destroying this object.
     destroyComputeResources();
     m_meshInfoBuffer.reset();
-    m_commandBuffers.clear();
+    m_cullingStatsBuffers.clear();
+    m_cullingUniformBuffers.clear();
+    m_shadowCommandBuffers.clear();
+    m_mainCommandBuffers.clear();
     m_objectBuffers.clear();
     SIDERA_LOG_INFO("GpuDriven", "GPU-driven scene destroyed.");
 }
@@ -93,13 +122,49 @@ GpuDrivenScene::~GpuDrivenScene() {
 void GpuDrivenScene::createComputeResources() {
     const VkDevice device = m_device.getLogicalDevice();
 
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-    for (uint32_t i = 0; i < bindings.size(); ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+
+    // Binding 0: ObjectBuffer (SSBO)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 1: MeshInfoBuffer (SSBO)
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 2: MainCommandBuffer (SSBO, writeonly)
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 3: ShadowCommandBuffer (SSBO, writeonly)
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 4: CullingUBO (Uniform buffer)
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 5: CullingStatsBuffer (SSBO, readwrite)
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 6: uHiZMap (Combined image sampler)
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -110,11 +175,16 @@ void GpuDrivenScene::createComputeResources() {
         "Failed to create GPU-driven compute descriptor set layout"
     );
 
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_framesInFlight * 3};
+    std::array<VkDescriptorPoolSize, 3> poolSizes = {{
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_framesInFlight * 5},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_framesInFlight * 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_framesInFlight * 1}
+    }};
+
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = m_framesInFlight;
     VK_CHECK(
         vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_computeDescriptorPool),
@@ -134,21 +204,57 @@ void GpuDrivenScene::createComputeResources() {
     );
 
     for (uint32_t f = 0; f < m_framesInFlight; ++f) {
-        const std::array<VkDescriptorBufferInfo, 3> infos = {{
-            {m_objectBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE},
-            {m_meshInfoBuffer->getHandle(), 0, VK_WHOLE_SIZE},
-            {m_commandBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE}
-        }};
+        const VkDescriptorBufferInfo objInfo{m_objectBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo meshInfo{m_meshInfoBuffer->getHandle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo mainCmdInfo{m_mainCommandBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo shdCmdInfo{m_shadowCommandBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo cullUboInfo{m_cullingUniformBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo statsInfo{m_cullingStatsBuffers[f]->getHandle(), 0, VK_WHOLE_SIZE};
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
-        for (uint32_t b = 0; b < writes.size(); ++b) {
-            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[b].dstSet = m_computeDescriptorSets[f];
-            writes[b].dstBinding = b;
-            writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[b].descriptorCount = 1;
-            writes[b].pBufferInfo = &infos[b];
-        }
+        std::array<VkWriteDescriptorSet, 6> writes{};
+
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_computeDescriptorSets[f];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &objInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_computeDescriptorSets[f];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo = &meshInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_computeDescriptorSets[f];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo = &mainCmdInfo;
+
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = m_computeDescriptorSets[f];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[3].descriptorCount = 1;
+        writes[3].pBufferInfo = &shdCmdInfo;
+
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = m_computeDescriptorSets[f];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[4].descriptorCount = 1;
+        writes[4].pBufferInfo = &cullUboInfo;
+
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = m_computeDescriptorSets[f];
+        writes[5].dstBinding = 5;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[5].descriptorCount = 1;
+        writes[5].pBufferInfo = &statsInfo;
+
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
@@ -197,7 +303,7 @@ void GpuDrivenScene::destroyComputeResources() noexcept {
         m_computePipelineLayout = VK_NULL_HANDLE;
     }
     if (m_computeDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_computeDescriptorPool, nullptr); // frees the sets
+        vkDestroyDescriptorPool(device, m_computeDescriptorPool, nullptr);
         m_computeDescriptorPool = VK_NULL_HANDLE;
         m_computeDescriptorSets.clear();
     }
@@ -208,7 +314,6 @@ void GpuDrivenScene::destroyComputeResources() noexcept {
 }
 
 void GpuDrivenScene::setScene(std::span<const Mesh* const> objectMeshes) {
-    // Group objects by mesh (stable) so that every batch maps to a single vertex/index binding.
     std::vector<const Mesh*> uniqueMeshes;
     std::unordered_map<const Mesh*, uint32_t> batchOfMesh;
     std::vector<std::vector<uint32_t>> objectsOfBatch;
@@ -276,7 +381,55 @@ void GpuDrivenScene::uploadObjects(uint32_t frameIndex, std::span<const GpuObjec
     }
 }
 
-void GpuDrivenScene::recordGenerateCommands(VkCommandBuffer cmd, uint32_t frameIndex) const {
+void GpuDrivenScene::uploadCullingUniforms(uint32_t frameIndex, const CullingUniformData& data) {
+    m_cullingUniformBuffers[frameIndex]->uploadData(&data, sizeof(CullingUniformData), 0);
+}
+
+void GpuDrivenScene::updateHiZDescriptor(uint32_t frameIndex, VkImageView hizImageView, VkSampler hizSampler) {
+    if (hizImageView == VK_NULL_HANDLE || hizSampler == VK_NULL_HANDLE) {
+        return;
+    }
+    const VkDevice device = m_device.getLogicalDevice();
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = hizSampler;
+    imageInfo.imageView = hizImageView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_computeDescriptorSets[frameIndex];
+    write.dstBinding = 6;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+void GpuDrivenScene::resetCullingStats(uint32_t frameIndex) {
+    CullingStats zeroStats{};
+    zeroStats.totalObjects = m_objectCount;
+    m_cullingStatsBuffers[frameIndex]->uploadData(&zeroStats, sizeof(CullingStats), 0);
+}
+
+CullingStats GpuDrivenScene::readCullingStats(uint32_t frameIndex) const noexcept {
+    CullingStats s{};
+    if (frameIndex < m_cullingStatsBuffers.size() && m_cullingStatsBuffers[frameIndex]) {
+        try {
+            m_cullingStatsBuffers[frameIndex]->downloadData(&s, sizeof(CullingStats), 0);
+        } catch (...) {}
+    }
+    return s;
+}
+
+void GpuDrivenScene::recordGenerateCommands(VkCommandBuffer cmd,
+                                            uint32_t frameIndex,
+                                            bool frustumCull,
+                                            bool occlusionCull,
+                                            bool hizValid,
+                                            uint32_t hizMipLevels,
+                                            glm::vec2 hizSize) const {
     if (m_objectCount == 0) {
         return;
     }
@@ -287,34 +440,55 @@ void GpuDrivenScene::recordGenerateCommands(VkCommandBuffer cmd, uint32_t frameI
         &m_computeDescriptorSets[frameIndex], 0, nullptr
     );
 
-    const GenCommandsPushConstants pc{m_objectCount, static_cast<uint32_t>(m_batches.size())};
+    const GenCommandsPushConstants pc{
+        .objectCount = m_objectCount,
+        .meshCount = static_cast<uint32_t>(m_batches.size()),
+        .frustumCullingEnabled = frustumCull ? 1u : 0u,
+        .occlusionCullingEnabled = occlusionCull ? 1u : 0u,
+        .hizValid = hizValid ? 1u : 0u,
+        .hizMipLevels = hizMipLevels,
+        .hizSize = hizSize
+    };
     vkCmdPushConstants(cmd, m_computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
     const uint32_t groups = (m_objectCount + kGenCommandsLocalSize - 1) / kGenCommandsLocalSize;
     vkCmdDispatch(cmd, groups, 1, 1);
 
-    // Compute shader writes -> indirect command reads (shadow cascades + main pass).
-    VkBufferMemoryBarrier2 barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.buffer = m_commandBuffers[frameIndex]->getHandle();
-    barrier.offset = 0;
-    barrier.size = VK_WHOLE_SIZE;
+    // Compute shader writes -> indirect command reads (main pass & shadow cascades)
+    std::array<VkBufferMemoryBarrier2, 2> barriers{};
+    barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[0].buffer = m_mainCommandBuffers[frameIndex]->getHandle();
+    barriers[0].offset = 0;
+    barriers[0].size = VK_WHOLE_SIZE;
+
+    barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barriers[1].buffer = m_shadowCommandBuffers[frameIndex]->getHandle();
+    barriers[1].offset = 0;
+    barriers[1].size = VK_WHOLE_SIZE;
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependencyInfo.bufferMemoryBarrierCount = 1;
-    dependencyInfo.pBufferMemoryBarriers = &barrier;
+    dependencyInfo.bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+    dependencyInfo.pBufferMemoryBarriers = barriers.data();
     vkCmdPipelineBarrier2(cmd, &dependencyInfo);
 }
 
-uint32_t GpuDrivenScene::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameIndex) const {
-    const VkBuffer commandBuffer = m_commandBuffers[frameIndex]->getHandle();
+uint32_t GpuDrivenScene::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameIndex, bool isShadow) const {
+    const VkBuffer commandBuffer = isShadow
+        ? m_shadowCommandBuffers[frameIndex]->getHandle()
+        : m_mainCommandBuffers[frameIndex]->getHandle();
     constexpr uint32_t kStride = sizeof(VkDrawIndexedIndirectCommand);
 
     uint32_t apiCalls = 0;
@@ -322,7 +496,6 @@ uint32_t GpuDrivenScene::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frame
         batch.mesh->bind(cmd);
 
         if (m_multiDrawIndirect) {
-            // One call per batch (chunked only if the batch exceeds maxDrawIndirectCount).
             uint32_t remaining = batch.count;
             uint32_t slot = batch.firstSlot;
             while (remaining > 0) {
@@ -333,7 +506,6 @@ uint32_t GpuDrivenScene::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frame
                 remaining -= chunk;
             }
         } else {
-            // Fallback: drawCount must be <= 1 without multiDrawIndirect.
             for (uint32_t i = 0; i < batch.count; ++i) {
                 vkCmdDrawIndexedIndirect(
                     cmd, commandBuffer, static_cast<VkDeviceSize>(batch.firstSlot + i) * kStride, 1, kStride);

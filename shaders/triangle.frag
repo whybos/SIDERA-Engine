@@ -21,6 +21,7 @@ layout(set = 0, binding = 2) uniform samplerCube uIrradianceMap;
 layout(set = 0, binding = 3) uniform samplerCube uPrefilteredMap;
 layout(set = 0, binding = 4) uniform sampler2D uBrdfLut;
 layout(set = 0, binding = 5) uniform sampler2DArray uShadowMap;
+layout(set = 0, binding = 7) uniform sampler2D uHiZMap;
 
 // Per-object material data. Supplied by the vertex stage as flat varyings so the same fragment
 // shader serves both the CPU-driven path (push constants) and the GPU-driven path (object SSBO).
@@ -266,6 +267,30 @@ void main() {
         // Mode 4: Shadow factor mask (white = fully lit, black = shadowed)
         outColor = vec4(vec3(shadowFactor), 1.0);
         return;
+    } else if (debugMode == 5) {
+        // Mode 5: Fullscreen Hi-Z depth map view
+        vec2 screenUV = gl_FragCoord.xy / scene.screenParams.xy;
+        float d = texture(uHiZMap, screenUV).r;
+        outColor = vec4(vec3(d), 1.0);
+        return;
+    } else if (debugMode == 6) {
+        // Mode 6: Picture-in-Picture thumbnail in top-right corner (Hi-Z depth)
+        vec2 screenCoord = gl_FragCoord.xy;
+        vec2 pipSize = vec2(360.0, 180.0);
+        vec2 pipPos = vec2(scene.screenParams.x - pipSize.x - 24.0, 24.0);
+        if (screenCoord.x >= pipPos.x && screenCoord.x <= pipPos.x + pipSize.x &&
+            screenCoord.y >= pipPos.y && screenCoord.y <= pipPos.y + pipSize.y) {
+            // Cyan border
+            if (screenCoord.x <= pipPos.x + 2.0 || screenCoord.x >= pipPos.x + pipSize.x - 2.0 ||
+                screenCoord.y <= pipPos.y + 2.0 || screenCoord.y >= pipPos.y + pipSize.y - 2.0) {
+                outColor = vec4(0.0, 0.85, 1.0, 1.0);
+                return;
+            }
+            vec2 pipUV = (screenCoord - pipPos) / pipSize;
+            float d = texture(uHiZMap, pipUV).r;
+            outColor = vec4(vec3(d), 1.0);
+            return;
+        }
     }
 
     outColor = vec4(color, 1.0);

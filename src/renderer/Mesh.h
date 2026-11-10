@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/BoundingVolume.h"
 #include "renderer/Vertex.h"
 #include "renderer/vulkan/VulkanBuffer.h"
 
@@ -44,6 +45,8 @@ public:
     [[nodiscard]] uint32_t getVertexCount() const noexcept { return m_vertexCount; }
     [[nodiscard]] uint32_t getIndexCount() const noexcept { return m_indexCount; }
     [[nodiscard]] std::string_view getName() const noexcept { return m_name; }
+    [[nodiscard]] const AABB& getLocalAABB() const noexcept { return m_localAabb; }
+    [[nodiscard]] const BoundingSphere& getLocalBoundingSphere() const noexcept { return m_localSphere; }
 
     [[nodiscard]] static std::unique_ptr<Mesh> createCube(
         const VulkanDevice& device,
@@ -79,6 +82,8 @@ private:
     std::unique_ptr<VulkanBuffer> m_indexBuffer;
     uint32_t m_vertexCount = 0;
     uint32_t m_indexCount = 0;
+    AABB m_localAabb{};
+    BoundingSphere m_localSphere{};
 };
 
 } // namespace sidera

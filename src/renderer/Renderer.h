@@ -1,11 +1,14 @@
 #pragma once
 
+#include "renderer/BoundingVolume.h"
+#include "renderer/Frustum.h"
 #include "renderer/Camera.h"
 #include "renderer/GpuDrivenScene.h"
 #include "renderer/Mesh.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
 #include "renderer/vulkan/VulkanDepthBuffer.h"
+#include "renderer/vulkan/VulkanHiZBuffer.h"
 #include "renderer/vulkan/VulkanShadowMap.h"
 #include "renderer/vulkan/VulkanFrameSync.h"
 #include "renderer/vulkan/VulkanSwapchain.h"
@@ -68,6 +71,8 @@ struct RenderObject {
     float textureStrength = 0.0f;
 
     [[nodiscard]] glm::mat4 computeModelMatrix() const noexcept;
+    [[nodiscard]] AABB computeWorldAABB() const noexcept;
+    [[nodiscard]] BoundingSphere computeWorldBoundingSphere() const noexcept;
 };
 
 // Must match the SceneUBO block in triangle.vert / triangle.frag (std140)
@@ -157,6 +162,20 @@ public:
     void setShadowDebugMode(uint32_t mode) noexcept { m_shadowDebugMode = mode; }
     void cycleShadowDebugMode() noexcept;
     [[nodiscard]] uint32_t getShadowDebugMode() const noexcept { return m_shadowDebugMode; }
+
+    // Frustum and Occlusion Culling (Milestone 15)
+    void setFrustumCullingEnabled(bool enabled) noexcept;
+    void toggleFrustumCulling() noexcept;
+    [[nodiscard]] bool isFrustumCullingEnabled() const noexcept { return m_frustumCullingEnabled; }
+
+    void setOcclusionCullingEnabled(bool enabled) noexcept;
+    void toggleOcclusionCulling() noexcept;
+    [[nodiscard]] bool isOcclusionCullingEnabled() const noexcept { return m_occlusionCullingEnabled; }
+
+    void cycleCullingDebugMode() noexcept;
+    void setCullingDebugMode(uint32_t mode) noexcept { m_cullingDebugMode = mode; }
+    [[nodiscard]] uint32_t getCullingDebugMode() const noexcept { return m_cullingDebugMode; }
+    [[nodiscard]] const CullingStats& getLastCullingStats() const noexcept { return m_lastCullingStats; }
 
     void updateCascades() noexcept;
     [[nodiscard]] const std::array<glm::mat4, 4>& getCascadeMatrices() const noexcept { return m_cascadeMatrices; }
@@ -250,6 +269,19 @@ private:
     uint32_t m_shadowDebugMode = 0; // 0=off, 1=cascade colors, 2=PIP thumbnail, 3=fullscreen depth, 4=shadow mask
     float m_shadowDepthBias = 0.0018f;
     uint32_t m_shadowDrawCalls = 0;
+
+    // Culling system (Milestone 15)
+    bool m_frustumCullingEnabled = true;
+    bool m_occlusionCullingEnabled = true;
+    bool m_canUseHiZ = false;
+    uint32_t m_cullingDebugMode = 0; // 0=off, 1=fullscreen Hi-Z, 2=PIP Hi-Z
+    std::array<std::unique_ptr<VulkanHiZBuffer>, kMaxFramesInFlight> m_hizBuffers;
+    std::array<bool, kMaxFramesInFlight> m_hizValid{};
+    glm::mat4 m_prevViewProj{1.0f};
+    glm::vec3 m_prevCameraPos{0.0f};
+    float m_prevCameraYaw = 0.0f;
+    float m_prevCameraPitch = 0.0f;
+    CullingStats m_lastCullingStats{};
 
     uint32_t m_cascadeCount = 4;
     float m_cascadeLambda = 0.75f;

@@ -152,6 +152,45 @@ void VulkanBuffer::uploadData(const void* srcData, VkDeviceSize size, VkDeviceSi
     vkUnmapMemory(logicalDevice, m_memory);
 }
 
+void VulkanBuffer::downloadData(void* dstData, VkDeviceSize size, VkDeviceSize offset) {
+    if (!dstData) {
+        SIDERA_LOG_ERROR("Buffer", "Cannot download into null destination pointer in VulkanBuffer.");
+        throw std::invalid_argument("VulkanBuffer::downloadData destination pointer is null.");
+    }
+    if (size == 0 || (offset + size) > m_size) {
+        SIDERA_LOG_ERROR(
+            "Buffer",
+            "Invalid download range (offset={}, size={}) for buffer of size {}.",
+            offset, size, m_size
+        );
+        throw std::out_of_range("VulkanBuffer::downloadData range exceeds buffer size.");
+    }
+    if ((m_memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0) {
+        SIDERA_LOG_ERROR("Buffer", "Cannot map a non-HOST_VISIBLE VulkanBuffer directly.");
+        throw std::runtime_error("VulkanBuffer is not host-visible and cannot be mapped directly.");
+    }
+
+    const VkDevice logicalDevice = m_device->getLogicalDevice();
+    void* mappedData = nullptr;
+
+    VK_CHECK(
+        vkMapMemory(logicalDevice, m_memory, offset, size, 0, &mappedData),
+        "Failed to map Vulkan buffer memory for download"
+    );
+
+    if ((m_memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0) {
+        VkMappedMemoryRange invalidateRange{};
+        invalidateRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        invalidateRange.memory = m_memory;
+        invalidateRange.offset = offset;
+        invalidateRange.size = size;
+        vkInvalidateMappedMemoryRanges(logicalDevice, 1, &invalidateRange);
+    }
+
+    std::memcpy(dstData, mappedData, static_cast<size_t>(size));
+    vkUnmapMemory(logicalDevice, m_memory);
+}
+
 std::unique_ptr<VulkanBuffer> VulkanBuffer::createDeviceLocalBuffer(
     const VulkanDevice& device,
     VkCommandPool commandPool,
