@@ -31,6 +31,8 @@ layout(location = 0) out vec3 fragWorldPos;
 layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec3 fragColor;
 layout(location = 3) out vec2 fragUV;
+layout(location = 4) flat out vec4 fragAlbedoMetallic;   // rgb = albedo tint, a = metallic
+layout(location = 5) flat out vec4 fragRoughnessAoTex;   // x = roughness, y = ao, z = texture strength
 
 void main() {
     vec4 world = pc.model * vec4(inPosition, 1.0);
@@ -39,5 +41,7 @@ void main() {
     fragNormal = normalize(transpose(inverse(mat3(pc.model))) * inNormal);
     fragColor = inColor;
     fragUV = inUV;
+    fragAlbedoMetallic = pc.albedoMetallic;
+    fragRoughnessAoTex = pc.roughnessAoTex;
     gl_Position = scene.viewProj * world;
 }

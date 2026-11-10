@@ -48,11 +48,22 @@ int main(int argc, char* argv[]) {
             config.cameraYaw = std::strtof(argv[i + 1], nullptr);
             config.cameraPitch = std::strtof(argv[i + 2], nullptr);
             i += 2;
+        } else if (arg == "--renderer" && i + 1 < argc) {
+            const std::string_view mode(argv[++i]);
+            if (mode == "cpu" || mode == "CPU") {
+                config.renderMode = sidera::RenderMode::Cpu;
+            } else {
+                config.renderMode = sidera::RenderMode::Gpu;
+            }
+        } else if (arg == "--gpu-driven" || arg == "--gpu") {
+            config.renderMode = sidera::RenderMode::Gpu;
+        } else if (arg == "--cpu-driven" || arg == "--cpu") {
+            config.renderMode = sidera::RenderMode::Cpu;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.13.0...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.14.0...");
         {
             sidera::Application app(config);
             app.run();

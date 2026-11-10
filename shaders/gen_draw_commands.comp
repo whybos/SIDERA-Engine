@@ -1,0 +1,75 @@
+#version 450
+
+// GPU-driven draw-command generation (Milestone 14).
+// One thread per scene object slot. Writes one VkDrawIndexedIndirectCommand per slot.
+// No culling is performed: every active object produces a draw; inactive/unknown objects
+// produce a zero-index-count command so the fixed command count stays valid.
+
+layout(local_size_x = 64) in;
+
+// Must match GpuObjectData in src/renderer/GpuDrivenScene.h (std430, 112 bytes).
+struct GpuObjectData {
+    mat4 model;
+    vec4 albedoMetallic;
+    vec4 roughnessAoTex;
+    uvec4 meshInfo;          // x = mesh batch index, y = active flag
+};
+
+// Must match GpuMeshDrawInfo in src/renderer/GpuDrivenScene.h (16 bytes).
+struct MeshDrawInfo {
+    uint indexCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint pad;
+};
+
+// Must match VkDrawIndexedIndirectCommand (20 bytes).
+struct DrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ObjectBuffer {
+    GpuObjectData objects[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer MeshInfoBuffer {
+    MeshDrawInfo meshes[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer CommandBuffer {
+    DrawIndexedIndirectCommand commands[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint objectCount;
+    uint meshCount;
+} pc;
+
+void main() {
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= pc.objectCount) {
+        return;
+    }
+
+    uvec4 info = objects[slot].meshInfo;
+
+    DrawIndexedIndirectCommand cmd;
+    cmd.indexCount    = 0u;
+    cmd.instanceCount = 1u;
+    cmd.firstIndex    = 0u;
+    cmd.vertexOffset  = 0;
+    cmd.firstInstance = slot; // identifies the object in the object buffer (gl_InstanceIndex)
+
+    if (info.y != 0u && info.x < pc.meshCount) {
+        MeshDrawInfo mesh = meshes[info.x];
+        cmd.indexCount   = mesh.indexCount;
+        cmd.firstIndex   = mesh.firstIndex;
+        cmd.vertexOffset = mesh.vertexOffset;
+    }
+
+    commands[slot] = cmd;
+}

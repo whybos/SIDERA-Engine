@@ -17,7 +17,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.13.0 - Cascaded Shadow Maps (CSM)",
+        .title = "SIDERA Engine v0.14.0 - GPU-Driven Rendering",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -31,6 +31,7 @@ struct ApplicationConfig {
     float cascadeLambda = 0.75f;   // --cascade-lambda 0.0..1.0
     bool showCascades = false;     // --show-cascades: cascade split color visualization
     bool showShadowMap = false;    // --show-shadow-map: shadow depth map debug visualization
+    RenderMode renderMode = RenderMode::Gpu; // --renderer gpu|cpu (GPU-driven indirect by default)
     std::optional<glm::vec3> cameraPos;
     std::optional<float> cameraYaw;
     std::optional<float> cameraPitch;

@@ -185,6 +185,22 @@ void VulkanDevice::createLogicalDevice() {
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &supportedFeatures);
     m_samplerAnisotropyEnabled = (supportedFeatures.samplerAnisotropy == VK_TRUE);
 
+    // Indirect-draw capabilities are optional: query first, enable only what the device exposes.
+    m_multiDrawIndirectEnabled = (supportedFeatures.multiDrawIndirect == VK_TRUE);
+    m_drawIndirectFirstInstanceEnabled = (supportedFeatures.drawIndirectFirstInstance == VK_TRUE);
+
+    // drawIndirectCount (Vulkan 1.2 core feature) is only detected and reported; it is not enabled
+    // because the GPU-driven path currently has no culling and therefore a statically known count.
+    {
+        VkPhysicalDeviceVulkan12Features supported12{};
+        supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceFeatures2 query2{};
+        query2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        query2.pNext = &supported12;
+        vkGetPhysicalDeviceFeatures2(m_physicalDevice, &query2);
+        m_drawIndirectCountSupported = (supported12.drawIndirectCount == VK_TRUE);
+    }
+
     // Enable Vulkan 1.3 Dynamic Rendering and Synchronization2
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -195,6 +211,8 @@ void VulkanDevice::createLogicalDevice() {
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     deviceFeatures2.pNext = &features13;
     deviceFeatures2.features.samplerAnisotropy = m_samplerAnisotropyEnabled ? VK_TRUE : VK_FALSE;
+    deviceFeatures2.features.multiDrawIndirect = m_multiDrawIndirectEnabled ? VK_TRUE : VK_FALSE;
+    deviceFeatures2.features.drawIndirectFirstInstance = m_drawIndirectFirstInstanceEnabled ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -218,6 +236,15 @@ void VulkanDevice::createLogicalDevice() {
         "Vulkan",
         "Logical device created (Vulkan 1.3 Dynamic Rendering: ENABLED, Synchronization2: ENABLED, SamplerAnisotropy: {}).",
         m_samplerAnisotropyEnabled ? "ENABLED" : "DISABLED"
+    );
+    SIDERA_LOG_INFO(
+        "Vulkan",
+        "Indirect drawing capabilities: multiDrawIndirect={}, drawIndirectFirstInstance={}, "
+        "drawIndirectCount={} (detected only, not used), maxDrawIndirectCount={}.",
+        m_multiDrawIndirectEnabled ? "ENABLED" : "UNAVAILABLE",
+        m_drawIndirectFirstInstanceEnabled ? "ENABLED" : "UNAVAILABLE",
+        m_drawIndirectCountSupported ? "SUPPORTED" : "UNAVAILABLE",
+        m_properties.limits.maxDrawIndirectCount
     );
 }
 

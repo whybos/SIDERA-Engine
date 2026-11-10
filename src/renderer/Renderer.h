@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/Camera.h"
+#include "renderer/GpuDrivenScene.h"
 #include "renderer/Mesh.h"
 #include "renderer/vulkan/GraphicsPipeline.h"
 #include "renderer/vulkan/VulkanBuffer.h"
@@ -30,6 +31,25 @@ class VulkanContext;
 struct ShadowPushConstants {
     glm::mat4 lightSpaceMatrix;
     glm::mat4 model;
+};
+
+// Draw-submission path. Cpu: one direct vkCmdDrawIndexed per object (push-constant transforms).
+// Gpu: compute-generated VkDrawIndexedIndirectCommand buffer + batched indirect draws.
+enum class RenderMode : uint32_t {
+    Cpu = 0,
+    Gpu = 1
+};
+
+// Averages/maxima accumulated since the previous consumeTimings() call.
+struct RendererTimings {
+    uint32_t cpuSamples = 0;
+    float cpuSubmitAvgMs = 0.0f;   // object upload + command recording + vkQueueSubmit (no fence wait)
+    float cpuSubmitMaxMs = 0.0f;
+    uint32_t gpuSamples = 0;       // 0 when timestamp queries are unsupported
+    float gpuTotalAvgMs = 0.0f;    // whole command buffer (includes any wait for the swapchain image)
+    float gpuGenAvgMs = 0.0f;      // GPU draw-command generation (compute + barrier), GPU mode only
+    float gpuShadowAvgMs = 0.0f;   // all shadow cascades
+    float gpuMainAvgMs = 0.0f;     // main PBR pass
 };
 
 struct RenderObject {
@@ -77,7 +97,8 @@ public:
              bool shadowsEnabled = true,
              uint32_t shadowResolution = 2048,
              uint32_t cascadeCount = 4,
-             uint32_t shadowDebugMode = 0);
+             uint32_t shadowDebugMode = 0,
+             RenderMode renderMode = RenderMode::Gpu);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -101,6 +122,20 @@ public:
     [[nodiscard]] uint32_t getDrawCallCount() const noexcept { return static_cast<uint32_t>(m_renderObjects.size()); }
     [[nodiscard]] uint32_t getShadowDrawCallCount() const noexcept { return m_shadowDrawCalls; }
     [[nodiscard]] uint32_t getTriangleCount() const noexcept;
+
+    // Draw-submission path selection (CPU direct draws vs. GPU-generated indirect draws).
+    // Requesting Gpu when it is unavailable keeps the CPU path and logs a warning.
+    void setRenderMode(RenderMode mode);
+    void toggleRenderMode();
+    [[nodiscard]] RenderMode getRenderMode() const noexcept { return m_renderMode; }
+    [[nodiscard]] bool isGpuDrivenAvailable() const noexcept { return m_gpuScene && m_pipelineIndirect && m_shadowIndirectPipeline != VK_NULL_HANDLE; }
+    // Actual vkCmdDraw* API calls recorded for the last frame (main pass / all shadow cascades).
+    [[nodiscard]] uint32_t getMainApiDrawCallCount() const noexcept { return m_mainApiDrawCalls; }
+    [[nodiscard]] uint32_t getShadowApiDrawCallCount() const noexcept { return m_shadowApiDrawCalls; }
+    [[nodiscard]] uint32_t getGpuObjectsProcessed() const noexcept { return m_gpuScene ? m_gpuScene->getObjectCount() : 0; }
+    [[nodiscard]] uint32_t getIndirectCommandsGenerated() const noexcept { return m_commandsGenerated; }
+    [[nodiscard]] uint32_t getIndirectCommandsSubmitted() const noexcept { return m_commandsSubmitted; }
+    [[nodiscard]] RendererTimings consumeTimings() noexcept;
 
     void setStressTestMode(bool enabled);
     void toggleStressTestMode();
@@ -137,7 +172,25 @@ private:
     void destroySceneMeshes() noexcept;
 
     void createShadowPipeline();
+    void createShadowPipelineVariant(const char* vertSpvPath,
+                                     VkDescriptorSetLayout setLayout,
+                                     uint32_t pushConstantSize,
+                                     VkPipelineLayout& outLayout,
+                                     VkPipeline& outPipeline);
     void destroyShadowPipeline() noexcept;
+
+    // GPU-driven rendering (Milestone 14)
+    void createGpuScene();
+    void createGpuPipelines();
+    void destroyGpuResources() noexcept;
+    void rebuildGpuScene();
+    void uploadGpuObjects(uint32_t frameIndex);
+    [[nodiscard]] bool isGpuDrivenActive() const noexcept { return m_renderMode == RenderMode::Gpu && isGpuDrivenAvailable(); }
+
+    // GPU timestamp queries (4 timestamps per frame slot)
+    void createTimestampResources();
+    void destroyTimestampResources() noexcept;
+    void collectGpuTimestamps(uint32_t frameIndex);
 
     void updateCameraUniformBuffer(uint32_t frameIndex);
     void recordShadowPass(VkCommandBuffer cmd);
@@ -168,6 +221,29 @@ private:
     // Dedicated depth-only shadow pipeline
     VkPipelineLayout m_shadowPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
+
+    // GPU-driven rendering (Milestone 14)
+    RenderMode m_renderMode = RenderMode::Cpu;
+    std::unique_ptr<GpuDrivenScene> m_gpuScene;
+    std::unique_ptr<GraphicsPipeline> m_pipelineIndirect;
+    VkPipelineLayout m_shadowIndirectLayout = VK_NULL_HANDLE;
+    VkPipeline m_shadowIndirectPipeline = VK_NULL_HANDLE;
+    std::vector<GpuObjectData> m_gpuSlotData; // scratch, reused every frame
+    uint32_t m_mainApiDrawCalls = 0;
+    uint32_t m_shadowApiDrawCalls = 0;
+    uint32_t m_commandsGenerated = 0;
+    uint32_t m_commandsSubmitted = 0;
+
+    // Timing (CPU submission via steady_clock, GPU via timestamp queries)
+    VkQueryPool m_timestampPool = VK_NULL_HANDLE;
+    float m_timestampPeriodNs = 0.0f;
+    uint32_t m_timestampValidBits = 0;
+    std::array<bool, kMaxFramesInFlight> m_timestampValid{};
+    double m_cpuSubmitSumMs = 0.0;
+    double m_cpuSubmitMaxMs = 0.0;
+    uint32_t m_cpuSubmitSamples = 0;
+    double m_gpuSumMs[4] = {0.0, 0.0, 0.0, 0.0}; // total, gen, shadow, main
+    uint32_t m_gpuSamples = 0;
 
     bool m_stressTestMode = false;
     bool m_shadowsEnabled = true;

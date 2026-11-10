@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.13.0";
+constexpr std::string_view kEngineVersion = "v0.14.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -22,7 +22,8 @@ Application::Application(const ApplicationConfig& config)
                  m_config.shadowsEnabled,
                  m_config.shadowResolution,
                  m_config.cascadeCount,
-                 m_config.showCascades ? 1u : (m_config.showShadowMap ? 2u : 0u))
+                 m_config.showCascades ? 1u : (m_config.showShadowMap ? 2u : 0u),
+                 m_config.renderMode)
     , m_baseTitle(m_config.window.title) {
     m_renderer.setCascadeLambda(m_config.cascadeLambda);
     m_statsEnabled = m_config.startWithStats;
@@ -67,17 +68,55 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
                       m_renderer.getShadowDebugMode() > 0 ? std::format(" [dbg:{}]", debugModeStr) : "")
         : "shadows OFF";
 
+    const bool isGpu = (m_renderer.getRenderMode() == RenderMode::Gpu);
+    const RendererTimings timings = m_renderer.consumeTimings();
+
+    std::string drawsInfo;
+    if (isGpu) {
+        drawsInfo = std::format("{} API draws [{} objs] (+{} shd), {} tris",
+                                m_renderer.getMainApiDrawCallCount(),
+                                m_renderer.getGpuObjectsProcessed(),
+                                m_renderer.getShadowApiDrawCallCount(),
+                                m_renderer.getTriangleCount());
+    } else {
+        drawsInfo = std::format("{} draws (+{} shadow), {} tris",
+                                m_renderer.getMainApiDrawCallCount(),
+                                m_renderer.getShadowDrawCallCount(),
+                                m_renderer.getTriangleCount());
+    }
+
+    std::string timingStr;
+    if (timings.cpuSamples > 0) {
+        timingStr = std::format(" | CPU-sub: {:.2f} ms", timings.cpuSubmitAvgMs);
+    }
+    if (timings.gpuSamples > 0) {
+        if (isGpu) {
+            timingStr += std::format(" | GPU: {:.2f} ms (gen {:.2f}, shd {:.2f}, main {:.2f})",
+                                     timings.gpuTotalAvgMs,
+                                     timings.gpuGenAvgMs,
+                                     timings.gpuShadowAvgMs,
+                                     timings.gpuMainAvgMs);
+        } else {
+            timingStr += std::format(" | GPU: {:.2f} ms (shd {:.2f}, main {:.2f})",
+                                     timings.gpuTotalAvgMs,
+                                     timings.gpuShadowAvgMs,
+                                     timings.gpuMainAvgMs);
+        }
+    }
+
     const std::string title = std::format(
-        "SIDERA {} | {:.1f} FPS (target {}) | {:.2f} ms (min {:.2f}, max {:.2f}) | 1% low {:.1f} | "
-        "{}x{} {} | {} draws (+{} shadow), {} tris | {} | limiter {}{}",
+        "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
+        "{}x{} {} | {}{}{} | limiter {}{}",
         kEngineVersion,
+        isGpu ? "GPU-DRIVEN" : "CPU-DRIVEN",
         r.fps,
         m_limiterEnabled ? std::format("{:.0f}", m_config.targetFps) : std::string("off"),
-        r.avgMs, r.minMs, r.maxMs,
+        r.avgMs,
         r.onePercentLowFps,
         extent.width, extent.height, presentMode,
-        m_renderer.getDrawCallCount(), m_renderer.getShadowDrawCallCount(), m_renderer.getTriangleCount(),
-        shadowInfo,
+        drawsInfo,
+        timingStr,
+        m_renderer.isShadowsEnabled() ? std::format(" | {}", shadowInfo) : "",
         m_limiterEnabled ? "ON" : "OFF",
         m_renderer.isStressTestMode() ? " | STRESS MODE" : ""
     );
@@ -95,7 +134,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -112,6 +151,7 @@ void Application::run() {
     bool f5WasDown = false;
     bool f6WasDown = false;
     bool f7WasDown = false;
+    bool f8WasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -121,12 +161,13 @@ void Application::run() {
         m_window.pollEvents();
 
         // F3: toggle performance stats. F4: toggle frame limiter. F5: toggle high-poly stress-test mode.
-        // F6: toggle real-time shadows. F7: cycle shadow debug visualization modes.
+        // F6: toggle real-time shadows. F7: cycle shadow debug visualization modes. F8: toggle GPU/CPU submission mode.
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
         const bool f6Down = m_window.isKeyPressed(GLFW_KEY_F6);
         const bool f7Down = m_window.isKeyPressed(GLFW_KEY_F7);
+        const bool f8Down = m_window.isKeyPressed(GLFW_KEY_F8);
 
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
@@ -167,11 +208,18 @@ void Application::run() {
                             m_renderer.getShadowDebugMode(),
                             dbgNames[m_renderer.getShadowDebugMode() % 5]);
         }
+        if (f8Down && !f8WasDown) {
+            m_renderer.toggleRenderMode();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Rendering submission switched: {}.",
+                            m_renderer.getRenderMode() == RenderMode::Gpu ? "GPU-DRIVEN (indirect)" : "CPU-DRIVEN (direct)");
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
         f6WasDown = f6Down;
         f7WasDown = f7Down;
+        f8WasDown = f8Down;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

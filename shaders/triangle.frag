@@ -22,16 +22,14 @@ layout(set = 0, binding = 3) uniform samplerCube uPrefilteredMap;
 layout(set = 0, binding = 4) uniform sampler2D uBrdfLut;
 layout(set = 0, binding = 5) uniform sampler2DArray uShadowMap;
 
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    vec4 albedoMetallic;   // rgb = albedo tint, a = metallic
-    vec4 roughnessAoTex;   // x = roughness, y = ao, z = texture strength
-} pc;
-
+// Per-object material data. Supplied by the vertex stage as flat varyings so the same fragment
+// shader serves both the CPU-driven path (push constants) and the GPU-driven path (object SSBO).
 layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
 layout(location = 3) in vec2 fragUV;
+layout(location = 4) flat in vec4 fragAlbedoMetallic;   // rgb = albedo tint, a = metallic
+layout(location = 5) flat in vec4 fragRoughnessAoTex;   // x = roughness, y = ao, z = texture strength
 
 layout(location = 0) out vec4 outColor;
 
@@ -160,12 +158,12 @@ float calculateCascadeShadow(vec3 worldPos, vec3 N, vec3 L, out int outCascadeIn
 }
 
 void main() {
-    float metallic  = clamp(pc.albedoMetallic.a, 0.0, 1.0);
-    float roughness = clamp(pc.roughnessAoTex.x, 0.04, 1.0);
-    float ao        = clamp(pc.roughnessAoTex.y, 0.0, 1.0);
+    float metallic  = clamp(fragAlbedoMetallic.a, 0.0, 1.0);
+    float roughness = clamp(fragRoughnessAoTex.x, 0.04, 1.0);
+    float ao        = clamp(fragRoughnessAoTex.y, 0.0, 1.0);
 
-    vec3 texAlbedo = mix(vec3(1.0), texture(uAlbedoMap, fragUV).rgb, pc.roughnessAoTex.z);
-    vec3 albedo = pc.albedoMetallic.rgb * fragColor * texAlbedo;
+    vec3 texAlbedo = mix(vec3(1.0), texture(uAlbedoMap, fragUV).rgb, fragRoughnessAoTex.z);
+    vec3 albedo = fragAlbedoMetallic.rgb * fragColor * texAlbedo;
 
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(scene.cameraPos.xyz - fragWorldPos);

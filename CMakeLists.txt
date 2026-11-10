@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.13.0
+    VERSION 0.14.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -124,6 +124,9 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_depth.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_indirect.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_depth_indirect.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gen_draw_commands.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/equirect_to_cubemap.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/irradiance_convolution.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/prefilter_cubemap.comp
@@ -197,6 +200,8 @@ set(SIDERA_SOURCES
     src/renderer/vulkan/VulkanDepthBuffer.cpp
     src/renderer/vulkan/VulkanShadowMap.h
     src/renderer/vulkan/VulkanShadowMap.cpp
+    src/renderer/GpuDrivenScene.h
+    src/renderer/GpuDrivenScene.cpp
     src/renderer/vulkan/VulkanTexture.h
     src/renderer/vulkan/VulkanTexture.cpp
     src/renderer/vulkan/VulkanCubemap.h

@@ -10,7 +10,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 
 namespace sidera {
 
@@ -28,6 +30,8 @@ namespace {
 constexpr const char* kVertShaderPath = "shaders/triangle.vert.spv";
 constexpr const char* kFragShaderPath = "shaders/triangle.frag.spv";
 constexpr const char* kShadowVertShaderPath = "shaders/shadow_depth.vert.spv";
+constexpr const char* kIndirectVertShaderPath = "shaders/triangle_indirect.vert.spv";
+constexpr const char* kShadowIndirectVertShaderPath = "shaders/shadow_depth_indirect.vert.spv";
 
 void transitionImageLayout(VkCommandBuffer cmd,
                            VkImage image,
@@ -70,12 +74,14 @@ Renderer::Renderer(const VulkanContext& context,
                    bool shadowsEnabled,
                    uint32_t shadowResolution,
                    uint32_t cascadeCount,
-                   uint32_t shadowDebugMode)
+                   uint32_t shadowDebugMode,
+                   RenderMode renderMode)
     : m_context(context)
     , m_clearColor(clearColor)
     , m_shadowsEnabled(shadowsEnabled)
     , m_cascadeCount(std::clamp(cascadeCount, 1u, 4u))
-    , m_shadowDebugMode(shadowDebugMode) {
+    , m_shadowDebugMode(shadowDebugMode)
+    , m_renderMode(renderMode) {
     const auto fbSize = window.getFramebufferSize();
 
     m_swapchain = std::make_unique<VulkanSwapchain>(
@@ -112,8 +118,10 @@ Renderer::Renderer(const VulkanContext& context,
 
     try {
         createCommandPoolsAndBuffers();
+        createTimestampResources();
         m_albedoTexture = VulkanTexture::createProceduralTestTexture(m_context.getDevice(), m_commandPools[0], 256, 256);
         m_iblMaps = IBLBuilder::build(m_context.getDevice(), m_commandPools[0]);
+        createGpuScene(); // optional; leaves GPU-driven mode unavailable on failure
         createCameraDescriptorResources();
 
         m_pipeline = std::make_unique<GraphicsPipeline>(
@@ -126,17 +134,25 @@ Renderer::Renderer(const VulkanContext& context,
         );
 
         createShadowPipeline();
+        createGpuPipelines(); // optional; leaves GPU-driven mode unavailable on failure
         createSceneMeshes();
     } catch (...) {
         destroySceneMeshes();
+        destroyGpuResources();
         destroyShadowPipeline();
         m_pipeline.reset();
         destroyCameraDescriptorResources();
         m_iblMaps = {};
         m_albedoTexture.reset();
         m_shadowMap.reset();
+        destroyTimestampResources();
         destroyCommandPools();
         throw;
+    }
+
+    if (m_renderMode == RenderMode::Gpu && !isGpuDrivenAvailable()) {
+        SIDERA_LOG_WARN("Renderer", "GPU-driven rendering requested but unavailable; using the CPU-driven path.");
+        m_renderMode = RenderMode::Cpu;
     }
 
     const auto& camPos = m_camera.getPosition();
@@ -162,6 +178,12 @@ Renderer::Renderer(const VulkanContext& context,
         m_shadowMap->resolution(),
         kMaxFramesInFlight
     );
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "Rendering mode: {} (GPU-driven path {}).",
+        m_renderMode == RenderMode::Gpu ? "GPU-DRIVEN (compute-generated indirect draws)" : "CPU-DRIVEN (direct draws)",
+        isGpuDrivenAvailable() ? "available" : "unavailable"
+    );
 }
 
 Renderer::~Renderer() {
@@ -170,12 +192,14 @@ Renderer::~Renderer() {
     m_context.waitIdle();
 
     destroySceneMeshes();
+    destroyGpuResources();
     destroyShadowPipeline();
     m_pipeline.reset();
     destroyCameraDescriptorResources();
     m_iblMaps = {};
     m_albedoTexture.reset();
     m_shadowMap.reset();
+    destroyTimestampResources();
     destroyCommandPools();
     m_frameSync.reset();
     m_depthBuffer.reset();
@@ -204,6 +228,7 @@ void Renderer::drawFrame(Window& window) {
 
     // 1. Wait until the GPU has finished executing the previous frame using this slot
     m_frameSync->waitForFrameFence(m_currentFrame);
+    collectGpuTimestamps(m_currentFrame);
 
     // 2. Acquire the next image from the swapchain
     uint32_t imageIndex = 0;
@@ -218,8 +243,14 @@ void Renderer::drawFrame(Window& window) {
     // 3. Only reset the fence once we know we will submit work to signal it
     m_frameSync->resetFrameFence(m_currentFrame);
 
-    // 4. Update the current frame's camera uniform buffer
+    // CPU submission timing starts here (fence wait and swapchain acquire are excluded)
+    const auto cpuSubmitStart = std::chrono::steady_clock::now();
+
+    // 4. Update the current frame's camera uniform buffer (and GPU-resident object data)
     updateCameraUniformBuffer(m_currentFrame);
+    if (isGpuDrivenActive()) {
+        uploadGpuObjects(m_currentFrame);
+    }
 
     // 5. Reset the frame's command pool and record dynamic rendering commands
     const VkDevice device = m_context.getDevice().getLogicalDevice();
@@ -235,6 +266,12 @@ void Renderer::drawFrame(Window& window) {
     const VkSemaphore renderFinishedSemaphore = m_frameSync->getRenderFinishedSemaphore(imageIndex);
     const VkFence inFlightFence = m_frameSync->getInFlightFence(m_currentFrame);
     submitCommandBuffer(cmd, imageAvailableSemaphore, renderFinishedSemaphore, inFlightFence);
+
+    const double cpuSubmitMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuSubmitStart).count();
+    m_cpuSubmitSumMs += cpuSubmitMs;
+    m_cpuSubmitMaxMs = std::max(m_cpuSubmitMaxMs, cpuSubmitMs);
+    ++m_cpuSubmitSamples;
 
     // 7. Present the rendered image to the swapchain
     const VkResult presentResult = m_swapchain->present(imageIndex, renderFinishedSemaphore);
@@ -289,13 +326,21 @@ void Renderer::createCameraDescriptorResources() {
     shadowLayoutBinding.descriptorCount = 1;
     shadowLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 6> bindings = {
+    // Binding 6: GPU-resident object data (GPU-driven path only; unused by the CPU-driven shaders)
+    VkDescriptorSetLayoutBinding objectLayoutBinding{};
+    objectLayoutBinding.binding = 6;
+    objectLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    objectLayoutBinding.descriptorCount = 1;
+    objectLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    const std::array<VkDescriptorSetLayoutBinding, 7> bindings = {
         uboLayoutBinding,
         samplerLayoutBinding,
         irradianceLayoutBinding,
         prefilteredLayoutBinding,
         brdfLutLayoutBinding,
-        shadowLayoutBinding
+        shadowLayoutBinding,
+        objectLayoutBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -308,9 +353,10 @@ void Renderer::createCameraDescriptorResources() {
         "Failed to create camera descriptor set layout"
     );
 
-    const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
+    const std::array<VkDescriptorPoolSize, 3> poolSizes = {{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 5}
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 5},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFramesInFlight}
     }};
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -424,6 +470,22 @@ void Renderer::createCameraDescriptorResources() {
         writes[5].pImageInfo = &shadowInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+        if (m_gpuScene) {
+            VkDescriptorBufferInfo objectInfo{};
+            objectInfo.buffer = m_gpuScene->getObjectBuffer(i);
+            objectInfo.offset = 0;
+            objectInfo.range = m_gpuScene->getObjectBufferSize();
+
+            VkWriteDescriptorSet objectWrite{};
+            objectWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            objectWrite.dstSet = m_cameraDescriptorSets[i];
+            objectWrite.dstBinding = 6;
+            objectWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            objectWrite.descriptorCount = 1;
+            objectWrite.pBufferInfo = &objectInfo;
+            vkUpdateDescriptorSets(device, 1, &objectWrite, 0, nullptr);
+        }
     }
 
     SIDERA_LOG_INFO(
@@ -595,9 +657,23 @@ void Renderer::cycleShadowDebugMode() noexcept {
 }
 
 void Renderer::createShadowPipeline() {
+    createShadowPipelineVariant(
+        kShadowVertShaderPath,
+        VK_NULL_HANDLE,
+        sizeof(ShadowPushConstants),
+        m_shadowPipelineLayout,
+        m_shadowPipeline
+    );
+}
+
+void Renderer::createShadowPipelineVariant(const char* vertSpvPath,
+                                           VkDescriptorSetLayout setLayout,
+                                           uint32_t pushConstantSize,
+                                           VkPipelineLayout& outLayout,
+                                           VkPipeline& outPipeline) {
     const VkDevice device = m_context.getDevice().getLogicalDevice();
 
-    VulkanShader vertShader(device, kShadowVertShaderPath);
+    VulkanShader vertShader(device, vertSpvPath);
 
     VkPipelineShaderStageCreateInfo vertStageInfo{};
     vertStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -668,17 +744,17 @@ void Renderer::createShadowPipeline() {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(ShadowPushConstants);
+    pushConstantRange.size = pushConstantSize;
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pSetLayouts = nullptr;
+    pipelineLayoutInfo.setLayoutCount = (setLayout != VK_NULL_HANDLE) ? 1 : 0;
+    pipelineLayoutInfo.pSetLayouts = (setLayout != VK_NULL_HANDLE) ? &setLayout : nullptr;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     VK_CHECK(
-        vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_shadowPipelineLayout),
+        vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &outLayout),
         "Failed to create shadow pipeline layout"
     );
 
@@ -703,15 +779,15 @@ void Renderer::createShadowPipeline() {
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_shadowPipelineLayout;
+    pipelineInfo.layout = outLayout;
     pipelineInfo.renderPass = VK_NULL_HANDLE;
 
     VK_CHECK(
-        vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowPipeline),
+        vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &outPipeline),
         "Failed to create shadow graphics pipeline"
     );
 
-    SIDERA_LOG_INFO("Pipeline", "Created dedicated depth-only shadow graphics pipeline.");
+    SIDERA_LOG_INFO("Pipeline", "Created depth-only shadow graphics pipeline ('{}').", vertSpvPath);
 }
 
 void Renderer::destroyShadowPipeline() noexcept {
@@ -731,6 +807,232 @@ void Renderer::destroyShadowPipeline() noexcept {
         vkDestroyPipelineLayout(device, m_shadowPipelineLayout, nullptr);
         m_shadowPipelineLayout = VK_NULL_HANDLE;
     }
+}
+
+void Renderer::createGpuScene() {
+    const VulkanDevice& dev = m_context.getDevice();
+    if (!GpuDrivenScene::isSupported(dev)) {
+        SIDERA_LOG_WARN(
+            "GpuDriven",
+            "GPU-driven rendering unavailable: drawIndirectFirstInstance is not supported by this device."
+        );
+        return;
+    }
+
+    try {
+        m_gpuScene = std::make_unique<GpuDrivenScene>(dev, kMaxFramesInFlight);
+    } catch (const std::exception& e) {
+        SIDERA_LOG_ERROR("GpuDriven", "GPU-driven scene initialization failed: {}", e.what());
+        m_gpuScene.reset();
+    }
+}
+
+void Renderer::createGpuPipelines() {
+    if (!m_gpuScene) {
+        return;
+    }
+
+    try {
+        m_pipelineIndirect = std::make_unique<GraphicsPipeline>(
+            m_context.getDevice().getLogicalDevice(),
+            m_swapchain->getImageFormat(),
+            m_depthBuffer->format(),
+            m_cameraDescriptorSetLayout,
+            kIndirectVertShaderPath,
+            kFragShaderPath
+        );
+
+        createShadowPipelineVariant(
+            kShadowIndirectVertShaderPath,
+            m_cameraDescriptorSetLayout,
+            sizeof(uint32_t), // cascade index
+            m_shadowIndirectLayout,
+            m_shadowIndirectPipeline
+        );
+    } catch (const std::exception& e) {
+        SIDERA_LOG_ERROR("GpuDriven", "GPU-driven pipeline creation failed: {}", e.what());
+        destroyGpuResources();
+    }
+}
+
+void Renderer::destroyGpuResources() noexcept {
+    const VkDevice device = m_context.getDevice().getLogicalDevice();
+    if (device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    m_pipelineIndirect.reset();
+
+    if (m_shadowIndirectPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_shadowIndirectPipeline, nullptr);
+        m_shadowIndirectPipeline = VK_NULL_HANDLE;
+    }
+    if (m_shadowIndirectLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_shadowIndirectLayout, nullptr);
+        m_shadowIndirectLayout = VK_NULL_HANDLE;
+    }
+
+    m_gpuScene.reset();
+}
+
+void Renderer::rebuildGpuScene() {
+    if (!m_gpuScene) {
+        return;
+    }
+
+    std::vector<const Mesh*> meshes;
+    meshes.reserve(m_renderObjects.size());
+    for (const auto& obj : m_renderObjects) {
+        meshes.push_back(obj.mesh);
+    }
+
+    try {
+        m_gpuScene->setScene(meshes);
+        m_commandsGenerated = m_gpuScene->getCommandsGenerated();
+    } catch (const std::exception& e) {
+        // Callers guarantee the GPU is idle here, so the GPU-driven resources can be released.
+        SIDERA_LOG_ERROR("GpuDriven", "GPU scene build failed ({}); falling back to the CPU-driven path.", e.what());
+        destroyGpuResources();
+        m_renderMode = RenderMode::Cpu;
+    }
+}
+
+void Renderer::uploadGpuObjects(uint32_t frameIndex) {
+    const auto& slotToObject = m_gpuScene->getSlotToObject();
+    const auto& slotToBatch = m_gpuScene->getSlotToBatch();
+
+    m_gpuSlotData.resize(slotToObject.size());
+    for (size_t slot = 0; slot < slotToObject.size(); ++slot) {
+        const RenderObject& obj = m_renderObjects[slotToObject[slot]];
+        GpuObjectData& data = m_gpuSlotData[slot];
+        data.model = obj.computeModelMatrix();
+        data.albedoMetallic = glm::vec4(obj.albedo, obj.metallic);
+        data.roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f);
+        data.meshInfo = glm::uvec4(slotToBatch[slot], 1u, 0u, 0u);
+    }
+    m_gpuScene->uploadObjects(frameIndex, m_gpuSlotData);
+}
+
+void Renderer::setRenderMode(RenderMode mode) {
+    if (mode == RenderMode::Gpu && !isGpuDrivenAvailable()) {
+        SIDERA_LOG_WARN("Renderer", "GPU-driven rendering is unavailable on this device; staying on the CPU-driven path.");
+        mode = RenderMode::Cpu;
+    }
+    if (mode == m_renderMode) {
+        return;
+    }
+    m_renderMode = mode;
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "Rendering mode switched to {} ({} objects, {} indirect commands generated per frame).",
+        mode == RenderMode::Gpu ? "GPU-DRIVEN" : "CPU-DRIVEN",
+        m_renderObjects.size(),
+        mode == RenderMode::Gpu ? m_commandsGenerated : 0u
+    );
+}
+
+void Renderer::toggleRenderMode() {
+    setRenderMode(m_renderMode == RenderMode::Gpu ? RenderMode::Cpu : RenderMode::Gpu);
+}
+
+RendererTimings Renderer::consumeTimings() noexcept {
+    RendererTimings t{};
+    if (m_cpuSubmitSamples > 0) {
+        t.cpuSamples = m_cpuSubmitSamples;
+        t.cpuSubmitAvgMs = static_cast<float>(m_cpuSubmitSumMs / m_cpuSubmitSamples);
+        t.cpuSubmitMaxMs = static_cast<float>(m_cpuSubmitMaxMs);
+    }
+    if (m_gpuSamples > 0) {
+        t.gpuSamples = m_gpuSamples;
+        t.gpuTotalAvgMs = static_cast<float>(m_gpuSumMs[0] / m_gpuSamples);
+        t.gpuGenAvgMs = static_cast<float>(m_gpuSumMs[1] / m_gpuSamples);
+        t.gpuShadowAvgMs = static_cast<float>(m_gpuSumMs[2] / m_gpuSamples);
+        t.gpuMainAvgMs = static_cast<float>(m_gpuSumMs[3] / m_gpuSamples);
+    }
+    m_cpuSubmitSumMs = 0.0;
+    m_cpuSubmitMaxMs = 0.0;
+    m_cpuSubmitSamples = 0;
+    for (double& v : m_gpuSumMs) {
+        v = 0.0;
+    }
+    m_gpuSamples = 0;
+    return t;
+}
+
+void Renderer::createTimestampResources() {
+    const VulkanDevice& dev = m_context.getDevice();
+    const uint32_t family = dev.getQueueFamilies().graphicsFamily.value();
+
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(dev.getPhysicalDevice(), &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(dev.getPhysicalDevice(), &familyCount, families.data());
+
+    const uint32_t validBits = (family < familyCount) ? families[family].timestampValidBits : 0;
+    const float period = dev.getProperties().limits.timestampPeriod;
+    if (validBits == 0 || period <= 0.0f) {
+        SIDERA_LOG_INFO("Renderer", "GPU timestamp queries unsupported on the graphics queue; GPU timings disabled.");
+        return;
+    }
+
+    VkQueryPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = kMaxFramesInFlight * 4;
+    VK_CHECK(
+        vkCreateQueryPool(dev.getLogicalDevice(), &poolInfo, nullptr, &m_timestampPool),
+        "Failed to create timestamp query pool"
+    );
+    m_timestampPeriodNs = period;
+    m_timestampValidBits = validBits;
+    SIDERA_LOG_INFO(
+        "Renderer",
+        "GPU timestamp queries enabled ({} valid bits, {:.2f} ns/tick).",
+        validBits,
+        period
+    );
+}
+
+void Renderer::destroyTimestampResources() noexcept {
+    const VkDevice device = m_context.getDevice().getLogicalDevice();
+    if (device != VK_NULL_HANDLE && m_timestampPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(device, m_timestampPool, nullptr);
+    }
+    m_timestampPool = VK_NULL_HANDLE;
+}
+
+void Renderer::collectGpuTimestamps(uint32_t frameIndex) {
+    // Called after waiting for this frame slot's fence, so results from its previous use are ready.
+    if (m_timestampPool == VK_NULL_HANDLE || !m_timestampValid[frameIndex]) {
+        return;
+    }
+
+    std::array<uint64_t, 4> ts{};
+    const VkResult result = vkGetQueryPoolResults(
+        m_context.getDevice().getLogicalDevice(),
+        m_timestampPool,
+        frameIndex * 4,
+        4,
+        sizeof(ts),
+        ts.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT
+    );
+    if (result != VK_SUCCESS) {
+        return;
+    }
+    m_timestampValid[frameIndex] = false; // consumed; re-armed when this slot is recorded again
+
+    const uint64_t mask = (m_timestampValidBits >= 64) ? ~0ull : ((1ull << m_timestampValidBits) - 1ull);
+    const auto toMs = [&](uint64_t begin, uint64_t end) {
+        return static_cast<double>((end - begin) & mask) * static_cast<double>(m_timestampPeriodNs) * 1e-6;
+    };
+
+    m_gpuSumMs[0] += toMs(ts[0], ts[3]);
+    m_gpuSumMs[1] += toMs(ts[0], ts[1]);
+    m_gpuSumMs[2] += toMs(ts[1], ts[2]);
+    m_gpuSumMs[3] += toMs(ts[2], ts[3]);
+    ++m_gpuSamples;
 }
 
 void Renderer::updateCameraUniformBuffer(uint32_t frameIndex) {
@@ -1103,6 +1405,8 @@ void Renderer::createSceneMeshes() {
         getTriangleCount(),
         getDrawCallCount()
     );
+
+    rebuildGpuScene();
 }
 
 void Renderer::destroySceneMeshes() noexcept {
@@ -1120,7 +1424,14 @@ void Renderer::destroySceneMeshes() noexcept {
 
 void Renderer::recordShadowPass(VkCommandBuffer cmd) {
     m_shadowDrawCalls = 0;
-    if (!m_shadowsEnabled || !m_shadowMap || m_shadowPipeline == VK_NULL_HANDLE || m_cascadeCount == 0) {
+    m_shadowApiDrawCalls = 0;
+    if (!m_shadowsEnabled || !m_shadowMap || m_cascadeCount == 0) {
+        return;
+    }
+    if (!isGpuDrivenActive() && m_shadowPipeline == VK_NULL_HANDLE) {
+        return;
+    }
+    if (isGpuDrivenActive() && m_shadowIndirectPipeline == VK_NULL_HANDLE) {
         return;
     }
 
@@ -1148,8 +1459,6 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd) {
 
         vkCmdBeginRendering(cmd, &renderingInfo);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
-
         VkViewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
@@ -1169,35 +1478,65 @@ void Renderer::recordShadowPass(VkCommandBuffer cmd) {
         const float biasSlope = 1.75f + static_cast<float>(cascadeIdx) * 0.35f;
         vkCmdSetDepthBias(cmd, biasConstant, 0.0f, biasSlope);
 
-        const glm::mat4& lightSpaceMatrix = m_cascadeMatrices[cascadeIdx];
-
-        const Mesh* lastBoundMesh = nullptr;
-        for (const auto& obj : m_renderObjects) {
-            if (!obj.mesh) {
-                continue;
-            }
-
-            const ShadowPushConstants shadowPc{
-                .lightSpaceMatrix = lightSpaceMatrix,
-                .model = obj.computeModelMatrix()
-            };
+        if (isGpuDrivenActive()) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowIndirectPipeline);
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_shadowIndirectLayout,
+                0,
+                1,
+                &m_cameraDescriptorSets[m_currentFrame],
+                0,
+                nullptr
+            );
 
             vkCmdPushConstants(
                 cmd,
-                m_shadowPipelineLayout,
+                m_shadowIndirectLayout,
                 VK_SHADER_STAGE_VERTEX_BIT,
                 0,
-                sizeof(ShadowPushConstants),
-                &shadowPc
+                sizeof(uint32_t),
+                &cascadeIdx
             );
 
-            if (obj.mesh != lastBoundMesh) {
-                obj.mesh->bind(cmd);
-                lastBoundMesh = obj.mesh;
-            }
+            const uint32_t apiCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame);
+            m_shadowApiDrawCalls += apiCalls;
+            m_shadowDrawCalls += m_gpuScene->getObjectCount();
+        } else {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
 
-            obj.mesh->draw(cmd);
-            ++m_shadowDrawCalls;
+            const glm::mat4& lightSpaceMatrix = m_cascadeMatrices[cascadeIdx];
+
+            const Mesh* lastBoundMesh = nullptr;
+            for (const auto& obj : m_renderObjects) {
+                if (!obj.mesh) {
+                    continue;
+                }
+
+                const ShadowPushConstants shadowPc{
+                    .lightSpaceMatrix = lightSpaceMatrix,
+                    .model = obj.computeModelMatrix()
+                };
+
+                vkCmdPushConstants(
+                    cmd,
+                    m_shadowPipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    sizeof(ShadowPushConstants),
+                    &shadowPc
+                );
+
+                if (obj.mesh != lastBoundMesh) {
+                    obj.mesh->bind(cmd);
+                    lastBoundMesh = obj.mesh;
+                }
+
+                obj.mesh->draw(cmd);
+                ++m_shadowDrawCalls;
+                ++m_shadowApiDrawCalls;
+            }
         }
 
         vkCmdEndRendering(cmd);
@@ -1213,14 +1552,39 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo), "Failed to begin recording command buffer");
 
-    // 1. Dedicated Directional Shadow Map Pass (Depth-Only)
+    // 0. Reset and write start timestamp (timestamp 0)
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(cmd, m_timestampPool, m_currentFrame * 4, 4);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 4 + 0);
+    }
+
+    // 1. GPU-driven draw command generation (compute pass)
+    if (isGpuDrivenActive()) {
+        m_gpuScene->recordGenerateCommands(cmd, m_currentFrame);
+        m_commandsGenerated = m_gpuScene->getCommandsGenerated();
+    } else {
+        m_commandsGenerated = 0;
+    }
+
+    // Timestamp 1: end of command generation
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 4 + 1);
+    }
+
+    // 2. Dedicated Directional Shadow Map Pass (Depth-Only)
     if (m_shadowsEnabled) {
         recordShadowPass(cmd);
     } else {
         m_shadowDrawCalls = 0;
+        m_shadowApiDrawCalls = 0;
     }
 
-    // 2. Main Color + Depth HDR PBR Scene Pass
+    // Timestamp 2: end of shadow pass
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 4 + 2);
+    }
+
+    // 3. Main Color + Depth HDR PBR Scene Pass
     const VkImage swapchainImage = m_swapchain->getImage(imageIndex);
     const VkExtent2D extent = m_swapchain->getExtent();
 
@@ -1283,9 +1647,6 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     vkCmdBeginRendering(cmd, &renderingInfo);
 
-    // Bind graphics pipeline and configure dynamic viewport/scissor for current swapchain extent
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->getHandle());
-
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
@@ -1300,49 +1661,76 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     scissor.extent = extent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Bind camera uniform buffer descriptor set (set = 0)
-    vkCmdBindDescriptorSets(
-        cmd,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_pipeline->getLayout(),
-        0,
-        1,
-        &m_cameraDescriptorSets[m_currentFrame],
-        0,
-        nullptr
-    );
+    if (isGpuDrivenActive()) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineIndirect->getHandle());
 
-    // Draw all 3D mesh instances in the scene using per-object push constants
-    const Mesh* lastBoundMesh = nullptr;
-    for (const auto& obj : m_renderObjects) {
-        if (!obj.mesh) {
-            continue;
-        }
-
-        const MeshPushConstants pushData{
-            .model = obj.computeModelMatrix(),
-            .albedoMetallic = glm::vec4(obj.albedo, obj.metallic),
-            .roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f)
-        };
-
-        vkCmdPushConstants(
+        vkCmdBindDescriptorSets(
             cmd,
-            m_pipeline->getLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipelineIndirect->getLayout(),
             0,
-            sizeof(MeshPushConstants),
-            &pushData
+            1,
+            &m_cameraDescriptorSets[m_currentFrame],
+            0,
+            nullptr
         );
 
-        if (obj.mesh != lastBoundMesh) {
-            obj.mesh->bind(cmd);
-            lastBoundMesh = obj.mesh;
-        }
+        m_mainApiDrawCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame);
+        m_commandsSubmitted = m_gpuScene->getObjectCount();
+    } else {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->getHandle());
 
-        obj.mesh->draw(cmd);
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipeline->getLayout(),
+            0,
+            1,
+            &m_cameraDescriptorSets[m_currentFrame],
+            0,
+            nullptr
+        );
+
+        m_mainApiDrawCalls = 0;
+        const Mesh* lastBoundMesh = nullptr;
+        for (const auto& obj : m_renderObjects) {
+            if (!obj.mesh) {
+                continue;
+            }
+
+            const MeshPushConstants pushData{
+                .model = obj.computeModelMatrix(),
+                .albedoMetallic = glm::vec4(obj.albedo, obj.metallic),
+                .roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f)
+            };
+
+            vkCmdPushConstants(
+                cmd,
+                m_pipeline->getLayout(),
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(MeshPushConstants),
+                &pushData
+            );
+
+            if (obj.mesh != lastBoundMesh) {
+                obj.mesh->bind(cmd);
+                lastBoundMesh = obj.mesh;
+            }
+
+            obj.mesh->draw(cmd);
+            ++m_mainApiDrawCalls;
+        }
+        m_commandsSubmitted = 0;
     }
 
     vkCmdEndRendering(cmd);
+
+    // Timestamp 3: end of main pass
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 4 + 3);
+        m_timestampValid[m_currentFrame] = true;
+    }
 
     // Transition swapchain image: COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
     transitionImageLayout(
@@ -1433,6 +1821,16 @@ void Renderer::recreateSwapchain(Window& window) {
             kVertShaderPath,
             kFragShaderPath
         );
+        if (m_pipelineIndirect) {
+            m_pipelineIndirect = std::make_unique<GraphicsPipeline>(
+                m_context.getDevice().getLogicalDevice(),
+                m_swapchain->getImageFormat(),
+                m_depthBuffer->format(),
+                m_cameraDescriptorSetLayout,
+                kIndirectVertShaderPath,
+                kFragShaderPath
+            );
+        }
     }
 
     window.resetResizedFlag();

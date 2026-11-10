@@ -38,6 +38,9 @@ public:
     [[nodiscard]] const VkPhysicalDeviceProperties& getProperties() const noexcept { return m_properties; }
     [[nodiscard]] bool isDynamicRenderingEnabled() const noexcept { return m_dynamicRenderingEnabled; }
     [[nodiscard]] bool isSamplerAnisotropyEnabled() const noexcept { return m_samplerAnisotropyEnabled; }
+    [[nodiscard]] bool isMultiDrawIndirectEnabled() const noexcept { return m_multiDrawIndirectEnabled; }
+    [[nodiscard]] bool isDrawIndirectFirstInstanceEnabled() const noexcept { return m_drawIndirectFirstInstanceEnabled; }
+    [[nodiscard]] bool isDrawIndirectCountSupported() const noexcept { return m_drawIndirectCountSupported; }
 
 private:
     void pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
@@ -57,6 +60,9 @@ private:
     VkPhysicalDeviceProperties m_properties{};
     bool m_dynamicRenderingEnabled = false;
     bool m_samplerAnisotropyEnabled = false;
+    bool m_multiDrawIndirectEnabled = false;
+    bool m_drawIndirectFirstInstanceEnabled = false;
+    bool m_drawIndirectCountSupported = false;
 
     static const std::vector<const char*> s_requiredDeviceExtensions;
 };
