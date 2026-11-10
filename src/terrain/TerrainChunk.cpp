@@ -20,7 +20,43 @@ TerrainChunk::TerrainChunk(uint32_t chunkId,
     : m_chunkId(chunkId)
     , m_gridX(gridX)
     , m_gridZ(gridZ) {
-    generateMesh(config, heightmap, device, transferCommandPool);
+    generateMesh(config, heightmap, &device, transferCommandPool);
+}
+
+TerrainChunk::TerrainChunk(uint32_t chunkId,
+                           uint32_t gridX,
+                           uint32_t gridZ,
+                           const TerrainConfig& config,
+                           const HeightmapData& heightmap)
+    : m_chunkId(chunkId)
+    , m_gridX(gridX)
+    , m_gridZ(gridZ) {
+    generateMesh(config, heightmap, nullptr, VK_NULL_HANDLE);
+}
+
+bool TerrainChunk::uploadGpu(const VulkanDevice& device, VkCommandPool transferCommandPool) {
+    if (!m_mesh) {
+        return false;
+    }
+    return m_mesh->uploadToGpu(device, transferCommandPool);
+}
+
+void TerrainChunk::releaseGpu() noexcept {
+    if (m_mesh) {
+        m_mesh->releaseGpuBuffers();
+    }
+}
+
+bool TerrainChunk::isGpuResident() const noexcept {
+    return m_mesh && m_mesh->isGpuResident();
+}
+
+uint64_t TerrainChunk::getGpuMemoryUsageBytes() const noexcept {
+    return m_mesh ? m_mesh->getGpuMemoryUsageBytes() : 0;
+}
+
+uint64_t TerrainChunk::getCpuMemoryUsageBytes() const noexcept {
+    return sizeof(TerrainChunk) + (m_mesh ? m_mesh->getCpuMemoryUsageBytes() : 0);
 }
 
 void TerrainChunk::bind(VkCommandBuffer cmd) const noexcept {
@@ -37,7 +73,7 @@ void TerrainChunk::draw(VkCommandBuffer cmd) const noexcept {
 
 void TerrainChunk::generateMesh(const TerrainConfig& config,
                                 const HeightmapData& heightmap,
-                                const VulkanDevice& device,
+                                const VulkanDevice* device,
                                 VkCommandPool transferCommandPool) {
     const uint32_t R = std::max(2u, config.chunkResolution);
     const uint32_t totalQuadsX = std::max(1u, config.chunksX * R);
@@ -123,7 +159,11 @@ void TerrainChunk::generateMesh(const TerrainConfig& config,
     }
 
     const std::string name = std::format("TerrainChunk_{}_{}", m_gridX, m_gridZ);
-    m_mesh = std::make_unique<Mesh>(device, transferCommandPool, vertices, indices, name);
+    if (device && transferCommandPool != VK_NULL_HANDLE) {
+        m_mesh = std::make_unique<Mesh>(*device, transferCommandPool, vertices, indices, name);
+    } else {
+        m_mesh = std::make_unique<Mesh>(vertices, indices, name);
+    }
 
     m_minHeight = minY;
     m_maxHeight = maxY;

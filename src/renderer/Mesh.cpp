@@ -109,6 +109,9 @@ Mesh::~Mesh() {
 }
 
 void Mesh::bind(VkCommandBuffer cmd) const noexcept {
+    if (!m_vertexBuffer || !m_indexBuffer) {
+        return;
+    }
     const VkBuffer vertexBuffers[] = {m_vertexBuffer->getHandle()};
     const VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
@@ -116,11 +119,52 @@ void Mesh::bind(VkCommandBuffer cmd) const noexcept {
 }
 
 void Mesh::draw(VkCommandBuffer cmd) const noexcept {
+    if (!m_vertexBuffer || !m_indexBuffer) {
+        return;
+    }
     vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
 }
 
 void Mesh::drawInstanced(VkCommandBuffer cmd, uint32_t instanceCount, uint32_t firstInstance) const noexcept {
+    if (!m_vertexBuffer || !m_indexBuffer) {
+        return;
+    }
     vkCmdDrawIndexed(cmd, m_indexCount, instanceCount, 0, 0, firstInstance);
+}
+
+bool Mesh::uploadToGpu(const VulkanDevice& device, VkCommandPool transferCommandPool) {
+    if (m_vertexBuffer && m_indexBuffer) {
+        return true; // Already on GPU
+    }
+    if (m_cpuVertices.empty() || m_cpuIndices.empty()) {
+        return false;
+    }
+
+    const VkDeviceSize vertexBufferSize = sizeof(Vertex) * m_cpuVertices.size();
+    const VkDeviceSize indexBufferSize = sizeof(uint32_t) * m_cpuIndices.size();
+
+    m_vertexBuffer = VulkanBuffer::createDeviceLocalBuffer(
+        device,
+        transferCommandPool,
+        m_cpuVertices.data(),
+        vertexBufferSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+    );
+
+    m_indexBuffer = VulkanBuffer::createDeviceLocalBuffer(
+        device,
+        transferCommandPool,
+        m_cpuIndices.data(),
+        indexBufferSize,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+    );
+
+    return (m_vertexBuffer != nullptr && m_indexBuffer != nullptr);
+}
+
+void Mesh::releaseGpuBuffers() noexcept {
+    m_indexBuffer.reset();
+    m_vertexBuffer.reset();
 }
 
 std::unique_ptr<Mesh> Mesh::createCube(float h) {

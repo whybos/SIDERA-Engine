@@ -36,6 +36,8 @@ public:
 
     // Instance management
     bool addInstance(uint32_t typeId, float worldX, float worldZ, const Terrain& terrain, uint32_t seed);
+    void addInstance(const FoliageInstance& instance);
+    uint32_t addInstances(const std::vector<FoliageInstance>& instances);
     uint32_t generateFoliageField(
         uint32_t typeId,
         uint32_t count,
@@ -45,6 +47,7 @@ public:
         uint32_t seed
     );
     void removeInstance(uint32_t instanceId);
+    void removeInstances(const std::vector<uint32_t>& instanceIds);
     void clearInstances() noexcept;
 
     // Runtime update: advances wind, evaluates camera distance/screen-space LOD, tests frustum culling. Returns true if visibility or LOD changed.

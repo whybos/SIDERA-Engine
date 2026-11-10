@@ -284,6 +284,11 @@ void Renderer::updateScene(float deltaTime) noexcept {
     }
     m_lodManager.endFrameStats();
 
+    // 1.5 World Streaming subsystem update (Milestone 21)
+    if (m_worldStreamingManager && m_worldStreamingManager->isEnabled()) {
+        m_worldStreamingManager->update(deltaTime, m_camera);
+    }
+
     // 2. Foliage subsystem update (Milestone 20)
     bool foliageChanged = false;
     if (m_foliageRenderer && m_foliageSystem && m_foliageSystem->getConfig().enabled) {
@@ -1724,6 +1729,29 @@ void Renderer::createSceneMeshes() {
     }
 
     // -----------------------------------------------------------------
+    // WORLD STREAMING SYSTEM (Milestone 21)
+    // -----------------------------------------------------------------
+    m_worldStreamingManager = std::make_unique<WorldStreamingManager>();
+    StreamingConfig streamConfig{};
+    streamConfig.enabled = true;
+    streamConfig.gridDimX = 4;
+    streamConfig.gridDimZ = 4;
+    streamConfig.regionSize = 30.0f; // 4x4 regions of 30m = 120m x 120m world
+    streamConfig.loadRadius = 65.0f;
+    streamConfig.preloadRadius = 90.0f;
+    streamConfig.unloadRadius = 115.0f;
+    streamConfig.hysteresisMargin = 25.0f;
+    m_worldStreamingManager->init(
+        streamConfig,
+        terrainConfig,
+        m_terrain->getHeightmap(),
+        &dev,
+        pool,
+        m_terrain.get(),
+        m_foliageSystem.get()
+    );
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2241,6 +2269,10 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    if (m_worldStreamingManager) {
+        m_worldStreamingManager->shutdown();
+        m_worldStreamingManager.reset();
+    }
     m_foliageRenderer.reset();
     if (m_foliageSystem) {
         m_foliageSystem->clearInstances();
@@ -2833,6 +2865,34 @@ void Renderer::setWindStrength(float strength) noexcept {
 void Renderer::setWindSpeed(float speed) noexcept {
     if (m_foliageSystem) {
         m_foliageSystem->setWindSpeed(speed);
+    }
+}
+
+const StreamingStats& Renderer::getStreamingStats() const noexcept {
+    static const StreamingStats s_empty{};
+    return m_worldStreamingManager ? m_worldStreamingManager->getStats() : s_empty;
+}
+
+bool Renderer::isStreamingEnabled() const noexcept {
+    return m_worldStreamingManager && m_worldStreamingManager->isEnabled();
+}
+
+void Renderer::setStreamingEnabled(bool enabled) noexcept {
+    if (m_worldStreamingManager) {
+        m_worldStreamingManager->setEnabled(enabled);
+    }
+}
+
+void Renderer::toggleStreaming() noexcept {
+    if (m_worldStreamingManager) {
+        m_worldStreamingManager->toggleEnabled();
+    }
+}
+
+void Renderer::forceReloadStreaming() noexcept {
+    if (m_worldStreamingManager) {
+        m_worldStreamingManager->forceUnloadAll();
+        m_worldStreamingManager->forceLoadAll();
     }
 }
 

@@ -28,6 +28,7 @@
 #include "foliage/FoliageStats.h"
 #include "foliage/FoliageSystem.h"
 #include "foliage/FoliageRenderer.h"
+#include "streaming/WorldStreamingManager.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -260,6 +261,15 @@ public:
     void setWindStrength(float strength) noexcept;
     void setWindSpeed(float speed) noexcept;
 
+    // World Streaming System (Milestone 21)
+    [[nodiscard]] WorldStreamingManager* getWorldStreamingManager() noexcept { return m_worldStreamingManager.get(); }
+    [[nodiscard]] const WorldStreamingManager* getWorldStreamingManager() const noexcept { return m_worldStreamingManager.get(); }
+    [[nodiscard]] const StreamingStats& getStreamingStats() const noexcept;
+    [[nodiscard]] bool isStreamingEnabled() const noexcept;
+    void setStreamingEnabled(bool enabled) noexcept;
+    void toggleStreaming() noexcept;
+    void forceReloadStreaming() noexcept;
+
 private:
     void createCameraDescriptorResources();
     void updateShadowDescriptorSets();
@@ -422,6 +432,9 @@ private:
     std::unique_ptr<FoliageSystem> m_foliageSystem;
     std::unique_ptr<FoliageRenderer> m_foliageRenderer;
     float m_totalTime = 0.0f;
+
+    // World Streaming System (Milestone 21)
+    std::unique_ptr<WorldStreamingManager> m_worldStreamingManager;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
     std::array<VkCommandBuffer, kMaxFramesInFlight> m_commandBuffers{};

@@ -67,6 +67,14 @@ public:
     uint32_t render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, const glm::vec4& vpParams) const noexcept;
     uint32_t renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const glm::mat4& lightSpaceMatrix) const noexcept;
 
+    // Dynamic Chunk Management for World Streaming
+    void addChunk(std::unique_ptr<TerrainChunk> chunk);
+    bool removeChunk(uint32_t chunkId);
+    void clearChunks() noexcept;
+    [[nodiscard]] TerrainChunk* getChunk(uint32_t chunkId) noexcept;
+    [[nodiscard]] const TerrainChunk* getChunk(uint32_t chunkId) const noexcept;
+    void recalculateBounds() noexcept;
+
     // Accessors
     [[nodiscard]] const TerrainConfig& getConfig() const noexcept { return m_config; }
     [[nodiscard]] const TerrainBounds& getBounds() const noexcept { return m_bounds; }

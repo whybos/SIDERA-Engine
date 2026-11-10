@@ -150,6 +150,58 @@ void Terrain::buildChunks() {
     m_stats.gpuMemoryUsageBytes = totalGpuMem;
 }
 
+void Terrain::recalculateBounds() noexcept {
+    computeBounds();
+}
+
+void Terrain::addChunk(std::unique_ptr<TerrainChunk> chunk) {
+    if (!chunk) return;
+    m_chunks.push_back(std::move(chunk));
+    m_stats.totalChunks = static_cast<uint32_t>(m_chunks.size());
+    recalculateBounds();
+}
+
+bool Terrain::removeChunk(uint32_t chunkId) {
+    auto it = std::find_if(m_chunks.begin(), m_chunks.end(), [chunkId](const std::unique_ptr<TerrainChunk>& c) {
+        return c && c->getChunkId() == chunkId;
+    });
+    if (it != m_chunks.end()) {
+        m_chunks.erase(it);
+        m_stats.totalChunks = static_cast<uint32_t>(m_chunks.size());
+        recalculateBounds();
+        return true;
+    }
+    return false;
+}
+
+void Terrain::clearChunks() noexcept {
+    m_chunks.clear();
+    m_stats.totalChunks = 0;
+    m_stats.visibleChunks = 0;
+    m_stats.culledChunks = 0;
+    m_stats.visibleTriangles = 0;
+    m_stats.totalVertices = 0;
+    m_stats.totalTriangles = 0;
+}
+
+TerrainChunk* Terrain::getChunk(uint32_t chunkId) noexcept {
+    for (auto& chunk : m_chunks) {
+        if (chunk && chunk->getChunkId() == chunkId) {
+            return chunk.get();
+        }
+    }
+    return nullptr;
+}
+
+const TerrainChunk* Terrain::getChunk(uint32_t chunkId) const noexcept {
+    for (const auto& chunk : m_chunks) {
+        if (chunk && chunk->getChunkId() == chunkId) {
+            return chunk.get();
+        }
+    }
+    return nullptr;
+}
+
 void Terrain::computeBounds() {
     float minX = std::numeric_limits<float>::max();
     float maxX = -std::numeric_limits<float>::max();
@@ -254,7 +306,7 @@ uint32_t Terrain::render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, c
 
     uint32_t drawCount = 0;
     for (const auto& chunk : m_chunks) {
-        if (!chunk->isVisible()) {
+        if (!chunk || !chunk->isVisible() || !chunk->isGpuResident()) {
             continue;
         }
 
@@ -275,9 +327,7 @@ uint32_t Terrain::renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayou
     uint32_t drawCount = 0;
     for (const auto& chunk : m_chunks) {
         // Draw chunks within reasonable shadow caster range
-        if (!chunk->isVisible()) {
-            // Note: Even if frustum culled from active camera, shadow casters might be needed,
-            // but for primary view directional light, visible chunks cast primary shadows
+        if (!chunk || !chunk->isVisible() || !chunk->isGpuResident()) {
             continue;
         }
 

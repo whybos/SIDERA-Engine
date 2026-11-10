@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.20.0 - Foliage Rendering",
+        .title = "SIDERA Engine v0.21.0 - World Streaming",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -26,6 +26,9 @@ struct ApplicationConfig {
     bool startWithStats = false;   // --stats: begin with the F3 overlay enabled
     float targetFps = 60.0f;       // frame limiter target (<= 0 disables); F4 toggles at runtime
     bool stressTest = false;       // --stress-test: high-poly stress scene (>= 1M triangles)
+    bool streamingEnabled = true;  // --streaming / --no-streaming
+    float streamLoadRadius = 65.0f;   // --stream-load-radius <val>
+    float streamUnloadRadius = 115.0f; // --stream-unload-radius <val>
     bool terrainEnabled = true;    // --terrain / --no-terrain
     std::string heightmapPath = ""; // --heightmap <path>
     bool lodEnabled = true;        // --lod / --no-lod

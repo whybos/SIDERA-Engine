@@ -148,11 +148,19 @@ int main(int argc, char* argv[]) {
             config.windStrength = std::strtof(argv[++i], nullptr);
         } else if (arg == "--wind-speed" && i + 1 < argc) {
             config.windSpeed = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--streaming") {
+            config.streamingEnabled = true;
+        } else if (arg == "--no-streaming") {
+            config.streamingEnabled = false;
+        } else if (arg == "--stream-load-radius" && i + 1 < argc) {
+            config.streamLoadRadius = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--stream-unload-radius" && i + 1 < argc) {
+            config.streamUnloadRadius = std::strtof(argv[++i], nullptr);
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.20.0 (Milestone 20: Foliage Rendering)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.21.0 (Milestone 21: World Streaming)...");
         {
             sidera::Application app(config);
             app.run();

@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.20.0";
+constexpr std::string_view kEngineVersion = "v0.21.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -37,6 +37,14 @@ Application::Application(const ApplicationConfig& config)
     m_renderer.setWindEnabled(m_config.windEnabled);
     m_renderer.setWindStrength(m_config.windStrength);
     m_renderer.setWindSpeed(m_config.windSpeed);
+    m_renderer.setStreamingEnabled(m_config.streamingEnabled);
+    if (auto* streamMgr = m_renderer.getWorldStreamingManager()) {
+        auto cfg = streamMgr->getConfig();
+        cfg.loadRadius = m_config.streamLoadRadius;
+        cfg.unloadRadius = m_config.streamUnloadRadius;
+        cfg.validate();
+        streamMgr->setConfig(cfg);
+    }
     if (m_config.showHiZ) {
         m_renderer.setCullingDebugMode(1);
     }
@@ -222,9 +230,25 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         foliageInfo = " | FOLIAGE: OFF";
     }
 
+    const auto streamStats = m_renderer.getStreamingStats();
+    std::string streamInfo;
+    if (m_renderer.isStreamingEnabled()) {
+        streamInfo = std::format(" | STREAMING: Act:{}/Res:{}/Load:{}/Unl:{} (Q:{}/{}, {:.1f} MB, {} up)",
+                                 streamStats.activeCount,
+                                 streamStats.residentCount,
+                                 streamStats.loadingCount + streamStats.queuedLoadCount,
+                                 streamStats.unloadedCount,
+                                 streamStats.cpuQueueLength,
+                                 streamStats.uploadQueueLength,
+                                 static_cast<double>(streamStats.totalGpuMemoryBytes) / (1024.0 * 1024.0),
+                                 streamStats.uploadOpsLastFrame);
+    } else {
+        streamInfo = " | STREAMING: OFF";
+    }
+
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}{}{}{}",
         kEngineVersion,
         isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
@@ -241,7 +265,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         std::format(" | INSTANCING: {}", instancingModeStr),
         vpInfo,
         lodInfo,
-        foliageInfo
+        foliageInfo,
+        streamInfo
     );
     m_window.setTitle(title);
 
@@ -256,8 +281,9 @@ Application::~Application() {
 
 void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
-    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.20.0 — Runtime Controls Guide:");
+    SIDERA_LOG_INFO("Core", "SIDERA Engine v0.21.0 — Runtime Controls Guide:");
     SIDERA_LOG_INFO("Core", "  [Movement]         W/A/S/D = Move, E/Q = Elevate/Descend, Right-Click + Drag = Look");
+    SIDERA_LOG_INFO("Core", "  [World Streaming]  F1 = Toggle World Streaming ON/OFF, U = Force Reload Streaming");
     SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
     SIDERA_LOG_INFO("Core", "  [Performance]      F4 = 60 FPS Limiter, F5 = High-Poly Stress Test");
@@ -274,7 +300,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "================================================================================");
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, O Foliage, P Wind, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F1 streaming, F2 terrain, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, L Forced LOD, K LOD Mode, O Foliage, P Wind, U Reload Streaming, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -290,6 +316,7 @@ void Application::run() {
     bool testedStressToggling = false;
     bool testedLOD = false;
     bool testedFoliage = false;
+    bool f1WasDown = false;
     bool f2WasDown = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
@@ -301,6 +328,7 @@ void Application::run() {
     bool f10WasDown = false;
     bool f11WasDown = false;
     bool f12WasDown = false;
+    bool uWasDown = false;
     bool vWasDown = false;
     bool bWasDown = false;
     bool tWasDown = false;
@@ -316,7 +344,7 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F2: terrain, F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, L: Forced LOD, K: LOD mode, V: Viewport mode, B: Normal space, T: Split view
+        const bool f1Down = m_window.isKeyPressed(GLFW_KEY_F1);
         const bool f2Down = m_window.isKeyPressed(GLFW_KEY_F2);
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
@@ -335,7 +363,18 @@ void Application::run() {
         const bool vDown = m_window.isKeyPressed(GLFW_KEY_V);
         const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
+        const bool uDown = m_window.isKeyPressed(GLFW_KEY_U);
 
+        if (f1Down && !f1WasDown) {
+            m_renderer.toggleStreaming();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "World Streaming toggled: {}.", m_renderer.isStreamingEnabled() ? "ENABLED" : "DISABLED");
+        }
+        if (uDown && !uWasDown) {
+            m_renderer.forceReloadStreaming();
+            m_frameStats.reset();
+            SIDERA_LOG_INFO("Core", "Forced reload across all streaming regions.");
+        }
         if (f2Down && !f2WasDown) {
             m_renderer.toggleTerrain();
             m_frameStats.reset();
@@ -438,6 +477,7 @@ void Application::run() {
             m_renderer.toggleSplitView();
             m_frameStats.reset();
         }
+        f1WasDown = f1Down;
         f2WasDown = f2Down;
         f3WasDown = f3Down;
         f4WasDown = f4Down;
@@ -456,6 +496,7 @@ void Application::run() {
         vWasDown = vDown;
         bWasDown = bDown;
         tWasDown = tDown;
+        uWasDown = uDown;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

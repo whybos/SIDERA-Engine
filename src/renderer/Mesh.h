@@ -47,6 +47,17 @@ public:
     void draw(VkCommandBuffer cmd) const noexcept;
     void drawInstanced(VkCommandBuffer cmd, uint32_t instanceCount, uint32_t firstInstance = 0) const noexcept;
 
+    // GPU buffer lifecycle for dynamic streaming
+    bool uploadToGpu(const VulkanDevice& device, VkCommandPool transferCommandPool);
+    void releaseGpuBuffers() noexcept;
+    [[nodiscard]] bool isGpuResident() const noexcept { return m_vertexBuffer != nullptr && m_indexBuffer != nullptr; }
+    [[nodiscard]] uint64_t getGpuMemoryUsageBytes() const noexcept {
+        return (m_vertexBuffer ? m_vertexBuffer->getSize() : 0) + (m_indexBuffer ? m_indexBuffer->getSize() : 0);
+    }
+    [[nodiscard]] uint64_t getCpuMemoryUsageBytes() const noexcept {
+        return sizeof(Mesh) + m_cpuVertices.size() * sizeof(Vertex) + m_cpuIndices.size() * sizeof(uint32_t);
+    }
+
     [[nodiscard]] uint32_t getVertexCount() const noexcept { return m_vertexCount; }
     [[nodiscard]] uint32_t getIndexCount() const noexcept { return m_indexCount; }
     [[nodiscard]] std::string_view getName() const noexcept { return m_name; }

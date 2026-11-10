@@ -7,6 +7,7 @@
 #include <cmath>
 #include <numbers>
 #include <random>
+#include <unordered_set>
 
 namespace sidera {
 
@@ -181,6 +182,30 @@ uint32_t FoliageSystem::generateFoliageField(
     );
 
     return placed;
+}
+
+void FoliageSystem::addInstance(const FoliageInstance& instance) {
+    m_instances.push_back(instance);
+    if (instance.instanceId >= m_nextInstanceId) {
+        m_nextInstanceId = instance.instanceId + 1;
+    }
+}
+
+uint32_t FoliageSystem::addInstances(const std::vector<FoliageInstance>& instances) {
+    if (instances.empty()) return 0;
+    m_instances.reserve(m_instances.size() + instances.size());
+    for (const auto& inst : instances) {
+        addInstance(inst);
+    }
+    return static_cast<uint32_t>(instances.size());
+}
+
+void FoliageSystem::removeInstances(const std::vector<uint32_t>& instanceIds) {
+    if (instanceIds.empty()) return;
+    std::unordered_set<uint32_t> idSet(instanceIds.begin(), instanceIds.end());
+    std::erase_if(m_instances, [&idSet](const FoliageInstance& inst) {
+        return idSet.contains(inst.instanceId);
+    });
 }
 
 void FoliageSystem::removeInstance(uint32_t instanceId) {

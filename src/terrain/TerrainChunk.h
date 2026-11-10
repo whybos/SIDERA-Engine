@@ -27,6 +27,11 @@ public:
                  const HeightmapData& heightmap,
                  const VulkanDevice& device,
                  VkCommandPool transferCommandPool);
+    TerrainChunk(uint32_t chunkId,
+                 uint32_t gridX,
+                 uint32_t gridZ,
+                 const TerrainConfig& config,
+                 const HeightmapData& heightmap);
     ~TerrainChunk() = default;
 
     TerrainChunk(const TerrainChunk&) = delete;
@@ -36,6 +41,13 @@ public:
 
     void bind(VkCommandBuffer cmd) const noexcept;
     void draw(VkCommandBuffer cmd) const noexcept;
+
+    // GPU buffer lifecycle for streaming
+    bool uploadGpu(const VulkanDevice& device, VkCommandPool transferCommandPool);
+    void releaseGpu() noexcept;
+    [[nodiscard]] bool isGpuResident() const noexcept;
+    [[nodiscard]] uint64_t getGpuMemoryUsageBytes() const noexcept;
+    [[nodiscard]] uint64_t getCpuMemoryUsageBytes() const noexcept;
 
     [[nodiscard]] uint32_t getChunkId() const noexcept { return m_chunkId; }
     [[nodiscard]] uint32_t getGridX() const noexcept { return m_gridX; }
@@ -54,7 +66,7 @@ public:
 private:
     void generateMesh(const TerrainConfig& config,
                       const HeightmapData& heightmap,
-                      const VulkanDevice& device,
+                      const VulkanDevice* device,
                       VkCommandPool transferCommandPool);
 
     uint32_t m_chunkId = 0;
