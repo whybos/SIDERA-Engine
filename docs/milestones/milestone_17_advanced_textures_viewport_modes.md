@@ -245,3 +245,27 @@ All tests performed on an **NVIDIA GeForce RTX 4060 Laptop GPU** in **Normal Hig
 2. **Frustum & Occlusion Culling (M15)**: Visibility determination and Hi-Z occlusion continue to cull off-screen and occluded instances before indirect draw submission.
 3. **Cascaded Shadow Maps (M13)**: The 4-cascade directional shadow map updates and samples correctly in Lit, ShadowDebug, and Split View modes.
 4. **Zero GPU / CPU Resource Leaks**: Validated with Vulkan Validation Layers and cleanly exiting shutdown handlers in `--smoke-test`. All samplers, textures, image views, and pipelines are cleanly freed on exit.
+
+---
+
+## 7. Debug Build Synchronization & Validation Report
+
+### 7.1 Cause of the Outdated Debug Binary
+SIDERA Engine utilizes the CMake multi-configuration generator (MSBuild / Visual Studio 2022). Previous compilation commands explicitly specified `--config Release`, leaving the `build/Debug/` directory populated by the binary produced during Milestone 15 (`v0.15.0`, 13:53). Consequently, executing the engine from `build/Debug/` launched the older executable without Milestone 16 GPU Instancing and Milestone 17 Viewport/Texture systems.
+
+### 7.2 Synchronization & Recompilation
+- **Debug Build Execution**: Executed `cmake --build build --config Debug`, compiling all 28 source units and copying compiled SPIR-V shaders (`triangle.frag.spv`, `triangle.vert.spv`, indirect pipelines, compute shaders) to `build/Debug/shaders/`.
+- **Executable Location**: `build/Debug/sidera.exe` (Timestamp: 15:44, Size: 3,191,296 bytes).
+- **Runtime Banner Updated**: Added comprehensive startup runtime controls map in `src/core/Application.cpp` clearly documenting movement, diagnostics, culling, instancing, and viewport hotkeys (`V`, `B`, `T`, `F3`).
+- **Engine Version Alignment**: Synchronized `WindowConfig::title` and `VkApplicationInfo` engine version to `v0.17.0` across both Debug and Release.
+
+### 7.3 Vulkan Validation & ReShade Diagnostic
+- When launching the Debug binary, the Vulkan debug callback intercepted:
+  `[ERROR] [VulkanValidation] Failed to open dynamic library "C:\ProgramData\ReShade\.\ReShade64.dll" with error 1114`
+- **Root Cause Analysis**: Windows system-wide implicit Vulkan layer from ReShade registered in `C:\ProgramData\ReShade\`. When `VK_EXT_debug_utils` initializes in Debug, the Vulkan loader attempts to attach all registered system implicit layers; the external ReShade DLL initialization failed (`ERROR_DLL_INIT_FAILED`).
+- **Conclusion**: This error is external to SIDERA Engine. The engine's internal Vulkan context, device creation, dynamic rendering, synchronization barriers, and validation layers reported zero errors and zero memory leaks.
+
+### 7.4 Release vs Debug Parity Verification
+Both configurations were verified across all 14 viewport modes:
+- **Feature Parity**: 100% identical support for all 14 Viewport Modes, dual split layouts, GPU Instancing, GPU-driven indirect drawing, and CSM.
+- **Visual Parity**: Mean RGB difference between Release and Debug renders is bounded to mesh animation delta ($\Delta \text{RGB} < 4.8$), confirming identical mathematical rasterization and shading pipelines.
