@@ -128,7 +128,7 @@ void InstanceBatchManager::populateGpuData(std::vector<GpuInstanceData>& outInst
 
         const Material& mat = batch->getMaterial();
         const glm::vec4 albedoMetallic(mat.albedo, mat.metallic);
-        const glm::vec4 roughnessAoTex(mat.roughness, mat.ao, mat.textureStrength, 0.0f);
+        const glm::vec4 roughnessAoTex(mat.roughness, mat.ao, mat.textureStrength, mat.normalMapStrength);
 
         for (uint32_t i = 0; i < count; ++i) {
             const Instance& inst = batch->getInstances()[i];

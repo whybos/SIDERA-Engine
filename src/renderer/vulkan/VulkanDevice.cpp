@@ -188,9 +188,12 @@ void VulkanDevice::createLogicalDevice() {
     // Indirect-draw capabilities are optional: query first, enable only what the device exposes.
     m_multiDrawIndirectEnabled = (supportedFeatures.multiDrawIndirect == VK_TRUE);
     m_drawIndirectFirstInstanceEnabled = (supportedFeatures.drawIndirectFirstInstance == VK_TRUE);
+    m_fillModeNonSolidEnabled = (supportedFeatures.fillModeNonSolid == VK_TRUE);
+    m_textureCompressionBCEnabled = (supportedFeatures.textureCompressionBC == VK_TRUE);
 
-    // drawIndirectCount (Vulkan 1.2 core feature) is only detected and reported; it is not enabled
-    // because the GPU-driven path currently has no culling and therefore a statically known count.
+    // Query Vulkan 1.2 features (drawIndirectCount and descriptorIndexing)
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     {
         VkPhysicalDeviceVulkan12Features supported12{};
         supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -199,6 +202,16 @@ void VulkanDevice::createLogicalDevice() {
         query2.pNext = &supported12;
         vkGetPhysicalDeviceFeatures2(m_physicalDevice, &query2);
         m_drawIndirectCountSupported = (supported12.drawIndirectCount == VK_TRUE);
+        m_descriptorIndexingSupported = (supported12.descriptorIndexing == VK_TRUE &&
+                                         supported12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE);
+
+        if (m_descriptorIndexingSupported) {
+            features12.descriptorIndexing = VK_TRUE;
+            features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            features12.runtimeDescriptorArray = supported12.runtimeDescriptorArray;
+            features12.descriptorBindingPartiallyBound = supported12.descriptorBindingPartiallyBound;
+            features12.descriptorBindingVariableDescriptorCount = supported12.descriptorBindingVariableDescriptorCount;
+        }
     }
 
     // Enable Vulkan 1.3 Dynamic Rendering and Synchronization2
@@ -207,12 +220,17 @@ void VulkanDevice::createLogicalDevice() {
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
 
+    // Chain 1.2 -> 1.3
+    features12.pNext = &features13;
+
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    deviceFeatures2.pNext = &features13;
+    deviceFeatures2.pNext = &features12;
     deviceFeatures2.features.samplerAnisotropy = m_samplerAnisotropyEnabled ? VK_TRUE : VK_FALSE;
     deviceFeatures2.features.multiDrawIndirect = m_multiDrawIndirectEnabled ? VK_TRUE : VK_FALSE;
     deviceFeatures2.features.drawIndirectFirstInstance = m_drawIndirectFirstInstanceEnabled ? VK_TRUE : VK_FALSE;
+    deviceFeatures2.features.fillModeNonSolid = m_fillModeNonSolidEnabled ? VK_TRUE : VK_FALSE;
+    deviceFeatures2.features.textureCompressionBC = m_textureCompressionBCEnabled ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -234,8 +252,12 @@ void VulkanDevice::createLogicalDevice() {
 
     SIDERA_LOG_INFO(
         "Vulkan",
-        "Logical device created (Vulkan 1.3 Dynamic Rendering: ENABLED, Synchronization2: ENABLED, SamplerAnisotropy: {}).",
-        m_samplerAnisotropyEnabled ? "ENABLED" : "DISABLED"
+        "Logical device created (Vulkan 1.3 Dynamic Rendering: ENABLED, Synchronization2: ENABLED, "
+        "SamplerAnisotropy: {}, FillModeNonSolid: {}, TextureCompressionBC: {}, DescriptorIndexing: {}).",
+        m_samplerAnisotropyEnabled ? "ENABLED" : "DISABLED",
+        m_fillModeNonSolidEnabled ? "ENABLED" : "UNAVAILABLE",
+        m_textureCompressionBCEnabled ? "ENABLED" : "UNAVAILABLE",
+        m_descriptorIndexingSupported ? "ENABLED" : "UNAVAILABLE"
     );
     SIDERA_LOG_INFO(
         "Vulkan",
@@ -246,6 +268,27 @@ void VulkanDevice::createLogicalDevice() {
         m_drawIndirectCountSupported ? "SUPPORTED" : "UNAVAILABLE",
         m_properties.limits.maxDrawIndirectCount
     );
+}
+
+VkFormatProperties VulkanDevice::getFormatProperties(VkFormat format) const noexcept {
+    VkFormatProperties props{};
+    if (m_physicalDevice != VK_NULL_HANDLE) {
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
+    }
+    return props;
+}
+
+bool VulkanDevice::isFormatSupported(VkFormat format, VkFormatFeatureFlags flags) const noexcept {
+    VkFormatProperties props = getFormatProperties(format);
+    return (props.optimalTilingFeatures & flags) == flags;
+}
+
+bool VulkanDevice::isLinearBlitSupported(VkFormat format) const noexcept {
+    constexpr VkFormatFeatureFlags required =
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+        VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    return isFormatSupported(format, required);
 }
 
 QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface) {

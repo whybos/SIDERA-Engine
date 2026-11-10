@@ -15,6 +15,8 @@
 #include "renderer/vulkan/VulkanSwapchain.h"
 #include "renderer/vulkan/VulkanTexture.h"
 #include "renderer/vulkan/VulkanCubemap.h"
+#include "renderer/TextureManager.h"
+#include "renderer/ViewportManager.h"
 #include "renderer/IBLBuilder.h"
 
 #include <glm/mat4x4.hpp>
@@ -70,6 +72,8 @@ struct RenderObject {
     float roughness = 0.5f;
     float ao = 1.0f;
     float textureStrength = 0.0f;
+    float normalMapStrength = 0.0f;
+    glm::vec3 emissive{0.0f, 0.0f, 0.0f};
 
     [[nodiscard]] glm::mat4 computeModelMatrix() const noexcept;
     [[nodiscard]] AABB computeWorldAABB() const noexcept;
@@ -198,6 +202,16 @@ public:
     [[nodiscard]] uint32_t getInstanceBatchCount() const noexcept { return m_batchManager.getBatchCount(); }
     void updateGpuDescriptors();
 
+    // Viewport Rendering Modes & Textures (Milestone 17)
+    void cycleViewportMode();
+    void setViewportMode(ViewportMode mode);
+    void toggleSplitView();
+    void toggleNormalSpace();
+    [[nodiscard]] ViewportManager& getViewportManager() noexcept { return m_viewportManager; }
+    [[nodiscard]] const ViewportManager& getViewportManager() const noexcept { return m_viewportManager; }
+    [[nodiscard]] TextureManager& getTextureManager() noexcept { return *m_textureManager; }
+    [[nodiscard]] const TextureManager& getTextureManager() const noexcept { return *m_textureManager; }
+
 private:
     void createCameraDescriptorResources();
     void updateShadowDescriptorSets();
@@ -244,7 +258,9 @@ private:
     std::unique_ptr<VulkanDepthBuffer> m_depthBuffer;
     std::unique_ptr<VulkanShadowMap> m_shadowMap;
     std::unique_ptr<VulkanFrameSync> m_frameSync;
-    std::unique_ptr<VulkanTexture> m_albedoTexture;
+    std::unique_ptr<TextureManager> m_textureManager;
+    ViewportManager m_viewportManager;
+    std::shared_ptr<VulkanTexture> m_albedoTexture;
     IBLMaps m_iblMaps;
 
     VkDescriptorSetLayout m_cameraDescriptorSetLayout = VK_NULL_HANDLE;
@@ -253,6 +269,7 @@ private:
     std::array<std::unique_ptr<VulkanBuffer>, kMaxFramesInFlight> m_cameraUniformBuffers;
 
     std::unique_ptr<GraphicsPipeline> m_pipeline;
+    std::unique_ptr<GraphicsPipeline> m_pipelineWireframe;
 
     // Dedicated depth-only shadow pipeline
     VkPipelineLayout m_shadowPipelineLayout = VK_NULL_HANDLE;

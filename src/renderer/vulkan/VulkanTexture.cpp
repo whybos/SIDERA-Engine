@@ -13,6 +13,7 @@
 namespace sidera {
 
 namespace {
+
 void imageBarrier(VkCommandBuffer cmd,
                   VkImage image,
                   VkImageLayout oldLayout,
@@ -20,7 +21,9 @@ void imageBarrier(VkCommandBuffer cmd,
                   VkPipelineStageFlags2 srcStage,
                   VkAccessFlags2 srcAccess,
                   VkPipelineStageFlags2 dstStage,
-                  VkAccessFlags2 dstAccess) noexcept {
+                  VkAccessFlags2 dstAccess,
+                  uint32_t baseMip = 0,
+                  uint32_t levelCount = 1) noexcept {
     VkImageMemoryBarrier2 b{};
     b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     b.srcStageMask = srcStage;
@@ -32,7 +35,7 @@ void imageBarrier(VkCommandBuffer cmd,
     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, levelCount, 0, 1};
 
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -41,22 +44,81 @@ void imageBarrier(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &dep);
 }
 
-size_t getFormatBytesPerPixel(VkFormat format) noexcept {
+} // namespace
+
+uint32_t VulkanTexture::calculateMipLevels(uint32_t width, uint32_t height) noexcept {
+    if (width == 0 || height == 0) return 1;
+    return static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+}
+
+bool VulkanTexture::isCompressedFormat(VkFormat format) noexcept {
     switch (format) {
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        case VK_FORMAT_BC2_UNORM_BLOCK:
+        case VK_FORMAT_BC2_SRGB_BLOCK:
+        case VK_FORMAT_BC3_UNORM_BLOCK:
+        case VK_FORMAT_BC3_SRGB_BLOCK:
+        case VK_FORMAT_BC4_UNORM_BLOCK:
+        case VK_FORMAT_BC4_SNORM_BLOCK:
+        case VK_FORMAT_BC5_UNORM_BLOCK:
+        case VK_FORMAT_BC5_SNORM_BLOCK:
+        case VK_FORMAT_BC7_UNORM_BLOCK:
+        case VK_FORMAT_BC7_SRGB_BLOCK:
+            return true;
+        default:
+            return false;
+    }
+}
+
+size_t VulkanTexture::getFormatBytesPerPixel(VkFormat format) noexcept {
+    switch (format) {
+        case VK_FORMAT_R8_UNORM:
+        case VK_FORMAT_R8_SRGB:
+            return 1;
+        case VK_FORMAT_R8G8_UNORM:
+        case VK_FORMAT_R8G8_SRGB:
+            return 2;
         case VK_FORMAT_R8G8B8A8_SRGB:
         case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+        case VK_FORMAT_B8G8R8A8_UNORM:
+            return 4;
+        case VK_FORMAT_R16G16_SFLOAT:
             return 4;
         case VK_FORMAT_R16G16B16A16_SFLOAT:
             return 8;
         case VK_FORMAT_R32G32B32A32_SFLOAT:
             return 16;
-        case VK_FORMAT_R16G16_SFLOAT:
-            return 4;
         default:
             return 4;
     }
 }
-} // namespace
+
+uint32_t VulkanTexture::getFormatBlockSize(VkFormat format) noexcept {
+    switch (format) {
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        case VK_FORMAT_BC4_UNORM_BLOCK:
+        case VK_FORMAT_BC4_SNORM_BLOCK:
+            return 8;
+        case VK_FORMAT_BC2_UNORM_BLOCK:
+        case VK_FORMAT_BC2_SRGB_BLOCK:
+        case VK_FORMAT_BC3_UNORM_BLOCK:
+        case VK_FORMAT_BC3_SRGB_BLOCK:
+        case VK_FORMAT_BC5_UNORM_BLOCK:
+        case VK_FORMAT_BC5_SNORM_BLOCK:
+        case VK_FORMAT_BC7_UNORM_BLOCK:
+        case VK_FORMAT_BC7_SRGB_BLOCK:
+            return 16;
+        default:
+            return 0;
+    }
+}
 
 VulkanTexture::VulkanTexture(const VulkanDevice& device,
                              VkCommandPool transferCommandPool,
@@ -65,29 +127,95 @@ VulkanTexture::VulkanTexture(const VulkanDevice& device,
                              uint32_t height,
                              VkFormat format,
                              VkImageUsageFlags additionalUsage,
-                             std::string_view name)
+                             std::string_view name,
+                             bool generateMips,
+                             VkSampler externalSampler)
     : m_device(device)
     , m_name(name)
     , m_width(width)
     , m_height(height)
     , m_format(format)
-    , m_usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | additionalUsage) {
+    , m_generateMips(generateMips)
+    , m_isCompressed(isCompressedFormat(format))
+    , m_ownsSampler(externalSampler == VK_NULL_HANDLE)
+    , m_sampler(externalSampler) {
     if (!rawPixels || width == 0 || height == 0) {
         throw std::invalid_argument("VulkanTexture requires pixel data and non-zero dimensions.");
+    }
+
+    if (m_generateMips && !m_isCompressed && m_device.isLinearBlitSupported(m_format)) {
+        m_mipLevels = calculateMipLevels(m_width, m_height);
+    } else {
+        m_mipLevels = 1;
+    }
+
+    m_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | additionalUsage;
+    if (m_mipLevels > 1) {
+        m_usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
 
     try {
         createImageAndMemory();
         uploadPixelsToImage(transferCommandPool, rawPixels);
         createImageView();
-        createSampler();
+        if (m_ownsSampler) {
+            createSampler();
+        }
     } catch (...) {
         cleanup();
         throw;
     }
 
-    SIDERA_LOG_INFO("Texture", "Created 2D Texture '{}' ({}x{} px, format: 0x{:X}, DEVICE_LOCAL).",
-                    m_name, m_width, m_height, static_cast<uint32_t>(m_format));
+    SIDERA_LOG_INFO(
+        "Texture",
+        "Created 2D Texture '{}' ({}x{} px, mips: {}, format: 0x{:X}, memory: {:.2f} KB).",
+        m_name, m_width, m_height, m_mipLevels, static_cast<uint32_t>(m_format),
+        static_cast<double>(m_memorySize) / 1024.0
+    );
+}
+
+VulkanTexture::VulkanTexture(const VulkanDevice& device,
+                             VkCommandPool transferCommandPool,
+                             const void* compressedData,
+                             size_t dataSize,
+                             uint32_t width,
+                             uint32_t height,
+                             VkFormat format,
+                             std::string_view name,
+                             VkSampler externalSampler)
+    : m_device(device)
+    , m_name(name)
+    , m_width(width)
+    , m_height(height)
+    , m_mipLevels(1)
+    , m_format(format)
+    , m_usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+    , m_generateMips(false)
+    , m_isCompressed(true)
+    , m_ownsSampler(externalSampler == VK_NULL_HANDLE)
+    , m_sampler(externalSampler) {
+    if (!compressedData || width == 0 || height == 0 || dataSize == 0) {
+        throw std::invalid_argument("Compressed VulkanTexture requires valid data and dimensions.");
+    }
+
+    try {
+        createImageAndMemory();
+        uploadPixelsToImage(transferCommandPool, compressedData, dataSize);
+        createImageView();
+        if (m_ownsSampler) {
+            createSampler();
+        }
+    } catch (...) {
+        cleanup();
+        throw;
+    }
+
+    SIDERA_LOG_INFO(
+        "Texture",
+        "Created Compressed 2D Texture '{}' ({}x{} px, format: 0x{:X}, memory: {:.2f} KB).",
+        m_name, m_width, m_height, static_cast<uint32_t>(m_format),
+        static_cast<double>(m_memorySize) / 1024.0
+    );
 }
 
 VulkanTexture::VulkanTexture(const VulkanDevice& device,
@@ -95,13 +223,19 @@ VulkanTexture::VulkanTexture(const VulkanDevice& device,
                              uint32_t height,
                              VkFormat format,
                              VkImageUsageFlags usage,
-                             std::string_view name)
+                             std::string_view name,
+                             VkSampler externalSampler)
     : m_device(device)
     , m_name(name)
     , m_width(width)
     , m_height(height)
+    , m_mipLevels(1)
     , m_format(format)
-    , m_usage(usage | VK_IMAGE_USAGE_SAMPLED_BIT) {
+    , m_usage(usage | VK_IMAGE_USAGE_SAMPLED_BIT)
+    , m_generateMips(false)
+    , m_isCompressed(isCompressedFormat(format))
+    , m_ownsSampler(externalSampler == VK_NULL_HANDLE)
+    , m_sampler(externalSampler) {
     if (width == 0 || height == 0) {
         throw std::invalid_argument("VulkanTexture requires non-zero dimensions.");
     }
@@ -109,7 +243,9 @@ VulkanTexture::VulkanTexture(const VulkanDevice& device,
     try {
         createImageAndMemory();
         createImageView();
-        createSampler();
+        if (m_ownsSampler) {
+            createSampler();
+        }
     } catch (...) {
         cleanup();
         throw;
@@ -128,7 +264,8 @@ std::unique_ptr<VulkanTexture> VulkanTexture::createProceduralTestTexture(
     const VulkanDevice& device,
     VkCommandPool transferCommandPool,
     uint32_t width,
-    uint32_t height) {
+    uint32_t height,
+    bool generateMips) {
     std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4u, 255u);
 
     const uint32_t cells = 8;
@@ -167,7 +304,7 @@ std::unique_ptr<VulkanTexture> VulkanTexture::createProceduralTestTexture(
     }
 
     return std::make_unique<VulkanTexture>(device, transferCommandPool, pixels.data(), width, height,
-                                           VK_FORMAT_R8G8B8A8_SRGB, 0, "ProceduralUVGrid");
+                                           VK_FORMAT_R8G8B8A8_SRGB, 0, "ProceduralUVGrid", generateMips, VK_NULL_HANDLE);
 }
 
 void VulkanTexture::createImageAndMemory() {
@@ -177,7 +314,7 @@ void VulkanTexture::createImageAndMemory() {
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     info.imageType = VK_IMAGE_TYPE_2D;
     info.extent = {m_width, m_height, 1};
-    info.mipLevels = 1;
+    info.mipLevels = m_mipLevels;
     info.arrayLayers = 1;
     info.format = m_format;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -190,6 +327,7 @@ void VulkanTexture::createImageAndMemory() {
 
     VkMemoryRequirements req{};
     vkGetImageMemoryRequirements(dev, m_image, &req);
+    m_memorySize = req.size;
 
     VkMemoryAllocateInfo alloc{};
     alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -201,9 +339,19 @@ void VulkanTexture::createImageAndMemory() {
     VK_CHECK(vkBindImageMemory(dev, m_image, m_memory, 0), "Failed to bind texture memory");
 }
 
-void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels) {
-    const size_t bpp = getFormatBytesPerPixel(m_format);
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(m_width) * m_height * bpp;
+void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels, size_t explicitByteSize) {
+    VkDeviceSize byteSize = explicitByteSize;
+    if (byteSize == 0) {
+        if (m_isCompressed) {
+            const uint32_t blockSize = getFormatBlockSize(m_format);
+            const uint32_t blocksX = (m_width + 3) / 4;
+            const uint32_t blocksY = (m_height + 3) / 4;
+            byteSize = static_cast<VkDeviceSize>(blocksX) * blocksY * blockSize;
+        } else {
+            const size_t bpp = getFormatBytesPerPixel(m_format);
+            byteSize = static_cast<VkDeviceSize>(m_width) * m_height * bpp;
+        }
+    }
 
     VulkanBuffer staging(m_device, byteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -221,7 +369,6 @@ void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels) 
     VK_CHECK(vkAllocateCommandBuffers(dev, &alloc, &cmd), "Failed to allocate texture upload command buffer");
 
     VkFence fence = VK_NULL_HANDLE;
-
     struct Cleanup {
         VkDevice dev;
         VkCommandPool pool;
@@ -242,18 +389,23 @@ void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels) 
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &begin), "Failed to begin texture upload command buffer");
 
+    // Transition mip 0 to transfer destination
     imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                  VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
-                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, 0, 1);
 
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {m_width, m_height, 1};
     vkCmdCopyBufferToImage(cmd, staging.getHandle(), m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    if (m_mipLevels > 1) {
+        generateMipmaps(cmd);
+    } else {
+        imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, 0, 1);
+    }
 
     VK_CHECK(vkEndCommandBuffer(cmd), "Failed to end texture upload command buffer");
 
@@ -271,13 +423,59 @@ void VulkanTexture::uploadPixelsToImage(VkCommandPool pool, const void* pixels) 
              "Failed waiting for texture upload fence");
 }
 
+void VulkanTexture::generateMipmaps(VkCommandBuffer cmd) {
+    int32_t mipWidth = static_cast<int32_t>(m_width);
+    int32_t mipHeight = static_cast<int32_t>(m_height);
+
+    for (uint32_t i = 1; i < m_mipLevels; ++i) {
+        // Transition mip (i - 1) to TRANSFER_SRC
+        imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, i - 1, 1);
+
+        // Transition mip i to TRANSFER_DST
+        imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, i, 1);
+
+        const int32_t nextWidth = std::max(1, mipWidth / 2);
+        const int32_t nextHeight = std::max(1, mipHeight / 2);
+
+        VkImageBlit blit{};
+        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+        blit.dstOffsets[0] = {0, 0, 0};
+        blit.dstOffsets[1] = {nextWidth, nextHeight, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+
+        vkCmdBlitImage(cmd,
+                       m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blit, VK_FILTER_LINEAR);
+
+        // Transition mip (i - 1) to SHADER_READ_ONLY_OPTIMAL
+        imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, i - 1, 1);
+
+        mipWidth = nextWidth;
+        mipHeight = nextHeight;
+    }
+
+    // Transition last mip level to SHADER_READ_ONLY_OPTIMAL
+    imageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, m_mipLevels - 1, 1);
+}
+
 void VulkanTexture::createImageView() {
     VkImageViewCreateInfo v{};
     v.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     v.image = m_image;
     v.viewType = VK_IMAGE_VIEW_TYPE_2D;
     v.format = m_format;
-    v.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    v.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, m_mipLevels, 0, 1};
     VK_CHECK(vkCreateImageView(m_device.getLogicalDevice(), &v, nullptr, &m_imageView),
              "Failed to create texture VkImageView");
 }
@@ -287,9 +485,9 @@ void VulkanTexture::createSampler() {
     s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     s.magFilter = VK_FILTER_LINEAR;
     s.minFilter = VK_FILTER_LINEAR;
-    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 
     if (m_device.isSamplerAnisotropyEnabled()) {
         s.anisotropyEnable = VK_TRUE;
@@ -302,7 +500,7 @@ void VulkanTexture::createSampler() {
     s.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
     s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     s.minLod = 0.0f;
-    s.maxLod = 0.0f;
+    s.maxLod = static_cast<float>(m_mipLevels);
 
     VK_CHECK(vkCreateSampler(m_device.getLogicalDevice(), &s, nullptr, &m_sampler),
              "Failed to create texture VkSampler");
@@ -312,7 +510,10 @@ void VulkanTexture::cleanup() noexcept {
     const VkDevice dev = m_device.getLogicalDevice();
     if (dev == VK_NULL_HANDLE) return;
 
-    if (m_sampler != VK_NULL_HANDLE)   { vkDestroySampler(dev, m_sampler, nullptr);     m_sampler = VK_NULL_HANDLE; }
+    if (m_ownsSampler && m_sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(dev, m_sampler, nullptr);
+        m_sampler = VK_NULL_HANDLE;
+    }
     if (m_imageView != VK_NULL_HANDLE) { vkDestroyImageView(dev, m_imageView, nullptr); m_imageView = VK_NULL_HANDLE; }
     if (m_image != VK_NULL_HANDLE)     { vkDestroyImage(dev, m_image, nullptr);         m_image = VK_NULL_HANDLE; }
     if (m_memory != VK_NULL_HANDLE)    { vkFreeMemory(dev, m_memory, nullptr);          m_memory = VK_NULL_HANDLE; }

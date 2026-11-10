@@ -16,15 +16,24 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4 screenParams;          // x = width, y = height
 } scene;
 
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 albedoMetallic;
+    vec4 roughnessAoTex;
+    vec4 viewportParams;        // x = viewportMode, y = normalSpace (0=world, 1=view), z = nearPlane, w = farPlane
+} pc;
+
 layout(set = 0, binding = 1) uniform sampler2D uAlbedoMap;
 layout(set = 0, binding = 2) uniform samplerCube uIrradianceMap;
 layout(set = 0, binding = 3) uniform samplerCube uPrefilteredMap;
 layout(set = 0, binding = 4) uniform sampler2D uBrdfLut;
 layout(set = 0, binding = 5) uniform sampler2DArray uShadowMap;
 layout(set = 0, binding = 7) uniform sampler2D uHiZMap;
+layout(set = 0, binding = 9) uniform sampler2D uNormalMap;
+layout(set = 0, binding = 10) uniform sampler2D uMetallicRoughnessMap;
+layout(set = 0, binding = 11) uniform sampler2D uAoMap;
+layout(set = 0, binding = 12) uniform sampler2D uEmissiveMap;
 
-// Per-object material data. Supplied by the vertex stage as flat varyings so the same fragment
-// shader serves both the CPU-driven path (push constants) and the GPU-driven path (object SSBO).
 layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
@@ -36,6 +45,25 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265358979323846;
 const float MAX_REFLECTION_LOD = 4.0; // 5 mip levels: 0, 1, 2, 3, 4
+
+// Surface cotangent frame calculation for tangent-space normal mapping without extra vertex attributes
+mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
+    vec3 dp1 = dFdx(p);
+    vec3 dp2 = dFdy(p);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    if (isinf(invmax) || isnan(invmax)) {
+        return mat3(1.0);
+    }
+    return mat3(T * invmax, B * invmax, N);
+}
 
 // Trowbridge-Reitz GGX normal distribution
 float distributionGGX(vec3 N, vec3 H, float roughness) {
@@ -140,7 +168,7 @@ float calculateCascadeShadow(vec3 worldPos, vec3 N, vec3 L, out int outCascadeIn
     float shadow = sampleCascadeShadow(worldPos, N, L, cascadeIndex);
 
     // Smooth transition blending near cascade boundaries
-    float blendFraction = scene.cascadeParams.y; // e.g. 0.15
+    float blendFraction = scene.cascadeParams.y;
     if (cascadeIndex < numCascades - 1 && blendFraction > 0.001) {
         float splitEnd = scene.cascadeSplits[cascadeIndex];
         float splitStart = (cascadeIndex == 0) ? 0.0 : scene.cascadeSplits[cascadeIndex - 1];
@@ -162,21 +190,47 @@ void main() {
     float metallic  = clamp(fragAlbedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(fragRoughnessAoTex.x, 0.04, 1.0);
     float ao        = clamp(fragRoughnessAoTex.y, 0.0, 1.0);
+    float texStrength = fragRoughnessAoTex.z;
 
-    vec3 texAlbedo = mix(vec3(1.0), texture(uAlbedoMap, fragUV).rgb, fragRoughnessAoTex.z);
-    vec3 albedo = fragAlbedoMetallic.rgb * fragColor * texAlbedo;
+    // 1. Albedo sampling
+    vec3 sampledAlbedo = texture(uAlbedoMap, fragUV).rgb;
+    vec3 albedo = fragAlbedoMetallic.rgb * fragColor * mix(vec3(1.0), sampledAlbedo, texStrength);
 
-    vec3 N = normalize(fragNormal);
+    // 2. Tangent-space Normal mapping via Cotangent Frame
+    vec3 geomNormal = normalize(fragNormal);
+    vec3 rawNormal = texture(uNormalMap, fragUV).xyz;
+    vec3 tangentNormal = normalize(rawNormal * 2.0 - 1.0);
+    vec3 N = geomNormal;
+    if (abs(tangentNormal.z) < 0.999 || abs(tangentNormal.x) > 0.001 || abs(tangentNormal.y) > 0.001) {
+        mat3 TBN = cotangentFrame(geomNormal, fragWorldPos, fragUV);
+        N = normalize(TBN * tangentNormal);
+    }
+
+    // 3. Metallic-Roughness map sampling (glTF: Green = Roughness, Blue = Metallic)
+    if (texStrength > 0.0) {
+        vec4 mrSample = texture(uMetallicRoughnessMap, fragUV);
+        if (mrSample.g > 0.001 || mrSample.b > 0.001) {
+            roughness = clamp(roughness * mrSample.g, 0.04, 1.0);
+            metallic  = clamp(mix(metallic, mrSample.b, texStrength), 0.0, 1.0);
+        }
+    }
+
+    // 4. Ambient Occlusion map sampling (Red = AO)
+    vec4 aoSample = texture(uAoMap, fragUV);
+    ao = clamp(ao * aoSample.r, 0.0, 1.0);
+
+    // 5. Emissive map sampling
+    vec3 emissive = texture(uEmissiveMap, fragUV).rgb;
+
     vec3 V = normalize(scene.cameraPos.xyz - fragWorldPos);
     vec3 R = reflect(-V, N);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
     // -----------------------------------------------------------------
-    // 1. Direct Lighting (Directional Sun with CSM + Point Lights)
+    // Direct Lighting (Directional Sun with CSM + Point Lights)
     // -----------------------------------------------------------------
     vec3 Lo = vec3(0.0);
 
-    // Directional sun: calculate cascade shadow visibility and attenuate ONLY direct sunlight
     vec3 Ls = normalize(scene.sunDirection.xyz);
     int cascadeIndex = 0;
     float blendFactor = 0.0;
@@ -185,7 +239,6 @@ void main() {
     vec3 sunDirect = evaluateLight(N, V, Ls, scene.sunColor.rgb * scene.sunColor.a, albedo, metallic, roughness, F0);
     Lo += sunDirect * shadowFactor;
 
-    // Point lights with inverse-square falloff (unaffected by directional sunlight shadow)
     for (int i = 0; i < 2; ++i) {
         vec3 toLight = scene.pointPosIntensity[i].xyz - fragWorldPos;
         float dist2 = max(dot(toLight, toLight), 0.01);
@@ -195,39 +248,116 @@ void main() {
     }
 
     // -----------------------------------------------------------------
-    // 2. Image-Based Lighting (IBL)
+    // Image-Based Lighting (IBL)
     // -----------------------------------------------------------------
     float NdotV = max(dot(N, V), 0.0);
     vec3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
-
     vec3 kS = F;
     vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
 
-    // Diffuse IBL: Irradiance convolution map
     vec3 irradiance = texture(uIrradianceMap, N).rgb;
     vec3 diffuseIBL = irradiance * albedo;
 
-    // Specular IBL: Prefiltered environment cubemap sampled at LOD = roughness * MAX_LOD
     vec3 prefilteredColor = textureLod(uPrefilteredMap, R, roughness * MAX_REFLECTION_LOD).rgb;
-    // BRDF integration LUT: x = scale (F0), y = bias
     vec2 brdf = texture(uBrdfLut, vec2(NdotV, roughness)).rg;
     vec3 specularIBL = prefilteredColor * (F * brdf.x + brdf.y);
 
     vec3 ambient = (kD * diffuseIBL + specularIBL) * ao;
 
-    // Total radiance
-    vec3 color = Lo + ambient;
-
-    // Reinhard tone mapping
-    color = color / (color + vec3(1.0));
-
     // -----------------------------------------------------------------
-    // 3. Debug Visualization Modes (F7 / CLI)
+    // Viewport Rendering Modes Evaluation (Milestone 17)
     // -----------------------------------------------------------------
-    int debugMode = int(scene.shadowParams.w + 0.5);
+    uint mode = uint(pc.viewportParams.x + 0.5);
+    uint normalSpace = uint(pc.viewportParams.y + 0.5);
+    float nearPlane = pc.viewportParams.z;
+    float farPlane = pc.viewportParams.w;
 
-    if (debugMode == 1) {
-        // Mode 1: Cascade Split Color Overlay with smooth transition visualization
+    // Mode 1: Unlit
+    if (mode == 1u) {
+        outColor = vec4(albedo + emissive, 1.0);
+        return;
+    }
+
+    // Mode 2: Wireframe
+    if (mode == 2u) {
+        outColor = vec4(0.20, 0.95, 0.35, 1.0);
+        return;
+    }
+
+    // Mode 3: Solid (Studio / Lambertian shading without textures)
+    if (mode == 3u) {
+        float NdotL = clamp(dot(N, Ls) * 0.7 + 0.3, 0.0, 1.0);
+        outColor = vec4(fragAlbedoMetallic.rgb * NdotL, 1.0);
+        return;
+    }
+
+    // Mode 4: Material Preview (IBL environment ambient only, no direct sunlight or shadows)
+    if (mode == 4u) {
+        vec3 previewColor = ambient + emissive;
+        previewColor = previewColor / (previewColor + vec3(1.0));
+        outColor = vec4(previewColor, 1.0);
+        return;
+    }
+
+    // Mode 5: Normals (Surface normals in RGB)
+    if (mode == 5u) {
+        vec3 displayNormal = (normalSpace == 1u) ? normalize(mat3(scene.view) * N) : N;
+        outColor = vec4(displayNormal * 0.5 + 0.5, 1.0);
+        return;
+    }
+
+    // Mode 6: Albedo (Base color only)
+    if (mode == 6u) {
+        outColor = vec4(albedo, 1.0);
+        return;
+    }
+
+    // Mode 7: Roughness (Grayscale)
+    if (mode == 7u) {
+        outColor = vec4(vec3(roughness), 1.0);
+        return;
+    }
+
+    // Mode 8: Metallic (Grayscale)
+    if (mode == 8u) {
+        outColor = vec4(vec3(metallic), 1.0);
+        return;
+    }
+
+    // Mode 9: Ambient Occlusion (Grayscale)
+    if (mode == 9u) {
+        outColor = vec4(vec3(ao), 1.0);
+        return;
+    }
+
+    // Mode 10: Depth (Linearized)
+    if (mode == 10u) {
+        float z_n = gl_FragCoord.z;
+        float near = max(nearPlane, 0.01);
+        float far = max(farPlane, 1.0);
+        float linearDepth = (near * far) / (far - z_n * (far - near));
+        float normDepth = clamp((linearDepth - near) / (far - near), 0.0, 1.0);
+        outColor = vec4(vec3(pow(normDepth, 0.45)), 1.0);
+        return;
+    }
+
+    // Mode 11: UV Coordinates
+    if (mode == 11u) {
+        vec2 uvFrac = fract(fragUV * 8.0);
+        float gridEdge = (uvFrac.x < 0.04 || uvFrac.y < 0.04) ? 1.0 : 0.0;
+        vec3 uvCol = mix(vec3(fract(fragUV.x), fract(fragUV.y), 0.5), vec3(1.0), gridEdge * 0.7);
+        outColor = vec4(uvCol, 1.0);
+        return;
+    }
+
+    // Mode 12: Emissive
+    if (mode == 12u) {
+        outColor = vec4(emissive, 1.0);
+        return;
+    }
+
+    // Mode 13: Shadow Debug (Cascade split colors)
+    if (mode == 13u) {
         const vec3 cascadeColors[4] = vec3[4](
             vec3(1.0, 0.22, 0.22),  // Cascade 0: Red
             vec3(0.22, 1.0, 0.22),  // Cascade 1: Green
@@ -238,59 +368,26 @@ void main() {
         if (blendFactor > 0.0 && cascadeIndex < 3) {
             tint = mix(tint, cascadeColors[cascadeIndex + 1], blendFactor);
         }
-        color = mix(color, tint, 0.45);
-    } else if (debugMode == 2) {
-        // Mode 2: Picture-in-Picture thumbnail in top-right corner (Cascade 0 depth)
-        vec2 screenCoord = gl_FragCoord.xy;
-        vec2 pipSize = vec2(360.0, 360.0);
-        vec2 pipPos = vec2(scene.screenParams.x - pipSize.x - 24.0, 24.0);
-        if (screenCoord.x >= pipPos.x && screenCoord.x <= pipPos.x + pipSize.x &&
-            screenCoord.y >= pipPos.y && screenCoord.y <= pipPos.y + pipSize.y) {
-            // Gold border
-            if (screenCoord.x <= pipPos.x + 2.0 || screenCoord.x >= pipPos.x + pipSize.x - 2.0 ||
-                screenCoord.y <= pipPos.y + 2.0 || screenCoord.y >= pipPos.y + pipSize.y - 2.0) {
-                outColor = vec4(1.0, 0.78, 0.1, 1.0);
-                return;
-            }
-            vec2 pipUV = (screenCoord - pipPos) / pipSize;
-            float d = texture(uShadowMap, vec3(pipUV, 0.0)).r;
-            outColor = vec4(vec3(d), 1.0);
-            return;
-        }
-    } else if (debugMode == 3) {
-        // Mode 3: Fullscreen shadow depth map view (Cascade 0)
-        vec2 screenUV = gl_FragCoord.xy / scene.screenParams.xy;
-        float d = texture(uShadowMap, vec3(screenUV, 0.0)).r;
-        outColor = vec4(vec3(d), 1.0);
+        vec3 shadowVis = mix(Lo + ambient, tint, 0.55);
+        shadowVis = shadowVis / (shadowVis + vec3(1.0));
+        outColor = vec4(shadowVis, 1.0);
         return;
-    } else if (debugMode == 4) {
-        // Mode 4: Shadow factor mask (white = fully lit, black = shadowed)
+    }
+
+    // Default: Mode 0 (Lit) -> Full PBR + Direct + IBL + Tone mapping
+    vec3 color = Lo + ambient + emissive;
+    color = color / (color + vec3(1.0));
+
+    // Handle legacy shadow overlay modes if active
+    int shadowDbg = int(scene.shadowParams.w + 0.5);
+    if (shadowDbg == 4) {
         outColor = vec4(vec3(shadowFactor), 1.0);
         return;
-    } else if (debugMode == 5) {
-        // Mode 5: Fullscreen Hi-Z depth map view
+    } else if (shadowDbg == 5) {
         vec2 screenUV = gl_FragCoord.xy / scene.screenParams.xy;
         float d = texture(uHiZMap, screenUV).r;
         outColor = vec4(vec3(d), 1.0);
         return;
-    } else if (debugMode == 6) {
-        // Mode 6: Picture-in-Picture thumbnail in top-right corner (Hi-Z depth)
-        vec2 screenCoord = gl_FragCoord.xy;
-        vec2 pipSize = vec2(360.0, 180.0);
-        vec2 pipPos = vec2(scene.screenParams.x - pipSize.x - 24.0, 24.0);
-        if (screenCoord.x >= pipPos.x && screenCoord.x <= pipPos.x + pipSize.x &&
-            screenCoord.y >= pipPos.y && screenCoord.y <= pipPos.y + pipSize.y) {
-            // Cyan border
-            if (screenCoord.x <= pipPos.x + 2.0 || screenCoord.x >= pipPos.x + pipSize.x - 2.0 ||
-                screenCoord.y <= pipPos.y + 2.0 || screenCoord.y >= pipPos.y + pipSize.y - 2.0) {
-                outColor = vec4(0.0, 0.85, 1.0, 1.0);
-                return;
-            }
-            vec2 pipUV = (screenCoord - pipPos) / pipSize;
-            float d = texture(uHiZMap, pipUV).r;
-            outColor = vec4(vec3(d), 1.0);
-            return;
-        }
     }
 
     outColor = vec4(color, 1.0);

@@ -71,11 +71,32 @@ int main(int argc, char* argv[]) {
             config.showHiZ = true;
         } else if ((arg == "--instances" || arg == "--instance-count") && i + 1 < argc) {
             config.instanceCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        } else if (arg == "--viewport-mode" && i + 1 < argc) {
+            const std::string_view mode(argv[++i]);
+            if (mode == "unlit") config.viewportMode = sidera::ViewportMode::Unlit;
+            else if (mode == "wireframe") config.viewportMode = sidera::ViewportMode::Wireframe;
+            else if (mode == "solid") config.viewportMode = sidera::ViewportMode::Solid;
+            else if (mode == "material_preview" || mode == "matpreview") config.viewportMode = sidera::ViewportMode::MaterialPreview;
+            else if (mode == "normals" || mode == "normal") config.viewportMode = sidera::ViewportMode::Normals;
+            else if (mode == "albedo") config.viewportMode = sidera::ViewportMode::Albedo;
+            else if (mode == "roughness") config.viewportMode = sidera::ViewportMode::Roughness;
+            else if (mode == "metallic") config.viewportMode = sidera::ViewportMode::Metallic;
+            else if (mode == "ao" || mode == "ambient_occlusion") config.viewportMode = sidera::ViewportMode::AmbientOcclusion;
+            else if (mode == "depth") config.viewportMode = sidera::ViewportMode::Depth;
+            else if (mode == "uv") config.viewportMode = sidera::ViewportMode::UV;
+            else if (mode == "emissive") config.viewportMode = sidera::ViewportMode::Emissive;
+            else if (mode == "shadow_debug" || mode == "shadow") config.viewportMode = sidera::ViewportMode::ShadowDebug;
+            else config.viewportMode = sidera::ViewportMode::Lit;
+        } else if (arg == "--split-view") {
+            config.splitView = true;
+        } else if (arg == "--normal-space" && i + 1 < argc) {
+            const std::string_view space(argv[++i]);
+            config.normalSpace = (space == "view" || space == "viewspace") ? 1 : 0;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.16.0 (Milestone 16: GPU Instancing)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.17.0 (Milestone 17: Advanced Texture System & Viewport Modes)...");
         {
             sidera::Application app(config);
             app.run();

@@ -20,6 +20,7 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 albedoMetallic;
     vec4 roughnessAoTex;
+    vec4 viewportParams; // x = viewportMode, y = normalSpace, z = nearPlane, w = farPlane
 } pc;
 
 layout(location = 0) in vec3 inPosition;

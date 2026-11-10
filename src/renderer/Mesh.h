@@ -17,13 +17,14 @@ namespace sidera {
 
 class VulkanDevice;
 
-// Per-object data (96 bytes, visible to vertex + fragment stages)
+// Per-object data (112 bytes, visible to vertex + fragment stages)
 struct alignas(16) MeshPushConstants {
     glm::mat4 model{1.0f};
     glm::vec4 albedoMetallic{1.0f, 1.0f, 1.0f, 0.0f};  // rgb = albedo tint, a = metallic
     glm::vec4 roughnessAoTex{0.5f, 1.0f, 0.0f, 0.0f};  // x = roughness, y = ambient occlusion, z = texture strength
+    glm::vec4 viewportParams{0.0f, 0.0f, 0.1f, 100.0f}; // x = viewportMode, y = normalSpace (0=world, 1=view), z = nearPlane, w = farPlane
 };
-static_assert(sizeof(MeshPushConstants) == 96, "MeshPushConstants must be 96 bytes.");
+static_assert(sizeof(MeshPushConstants) == 112, "MeshPushConstants must be 112 bytes.");
 
 class Mesh {
 public:

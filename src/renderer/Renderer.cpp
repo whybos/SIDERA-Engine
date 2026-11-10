@@ -133,7 +133,9 @@ Renderer::Renderer(const VulkanContext& context,
     try {
         createCommandPoolsAndBuffers();
         createTimestampResources();
-        m_albedoTexture = VulkanTexture::createProceduralTestTexture(m_context.getDevice(), m_commandPools[0], 256, 256);
+        m_textureManager = std::make_unique<TextureManager>(m_context.getDevice(), m_commandPools[0]);
+        m_albedoTexture = m_textureManager->getProceduralUvGrid();
+        m_viewportManager.updateExtents(swapExtent.width, swapExtent.height);
         m_iblMaps = IBLBuilder::build(m_context.getDevice(), m_commandPools[0]);
         for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
             m_hizBuffers[i] = std::make_unique<VulkanHiZBuffer>(m_context.getDevice(), 1024, 512);
@@ -162,9 +164,11 @@ Renderer::Renderer(const VulkanContext& context,
         destroyGpuResources();
         destroyShadowPipeline();
         m_pipeline.reset();
+        m_pipelineWireframe.reset();
         destroyCameraDescriptorResources();
         m_iblMaps = {};
         m_albedoTexture.reset();
+        m_textureManager.reset();
         m_shadowMap.reset();
         destroyTimestampResources();
         destroyCommandPools();
@@ -220,9 +224,11 @@ Renderer::~Renderer() {
     destroyGpuResources();
     destroyShadowPipeline();
     m_pipeline.reset();
+    m_pipelineWireframe.reset();
     destroyCameraDescriptorResources();
     m_iblMaps = {};
     m_albedoTexture.reset();
+    m_textureManager.reset();
     m_shadowMap.reset();
     destroyTimestampResources();
     destroyCommandPools();
@@ -398,7 +404,35 @@ void Renderer::createCameraDescriptorResources() {
     visibleLayoutBinding.descriptorCount = 1;
     visibleLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    const std::array<VkDescriptorSetLayoutBinding, 9> bindings = {
+    // Binding 9: Normal Map
+    VkDescriptorSetLayoutBinding normalLayoutBinding{};
+    normalLayoutBinding.binding = 9;
+    normalLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    normalLayoutBinding.descriptorCount = 1;
+    normalLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 10: Metallic-Roughness Map
+    VkDescriptorSetLayoutBinding metalRoughLayoutBinding{};
+    metalRoughLayoutBinding.binding = 10;
+    metalRoughLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    metalRoughLayoutBinding.descriptorCount = 1;
+    metalRoughLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 11: Ambient Occlusion Map
+    VkDescriptorSetLayoutBinding aoLayoutBinding{};
+    aoLayoutBinding.binding = 11;
+    aoLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    aoLayoutBinding.descriptorCount = 1;
+    aoLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 12: Emissive Map
+    VkDescriptorSetLayoutBinding emissiveLayoutBinding{};
+    emissiveLayoutBinding.binding = 12;
+    emissiveLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    emissiveLayoutBinding.descriptorCount = 1;
+    emissiveLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const std::array<VkDescriptorSetLayoutBinding, 13> bindings = {
         uboLayoutBinding,
         samplerLayoutBinding,
         irradianceLayoutBinding,
@@ -407,7 +441,11 @@ void Renderer::createCameraDescriptorResources() {
         shadowLayoutBinding,
         objectLayoutBinding,
         hizLayoutBinding,
-        visibleLayoutBinding
+        visibleLayoutBinding,
+        normalLayoutBinding,
+        metalRoughLayoutBinding,
+        aoLayoutBinding,
+        emissiveLayoutBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -422,7 +460,7 @@ void Renderer::createCameraDescriptorResources() {
 
     const std::array<VkDescriptorPoolSize, 3> poolSizes = {{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 6},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFramesInFlight * 10},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxFramesInFlight * 4}
     }};
 
@@ -498,7 +536,27 @@ void Renderer::createCameraDescriptorResources() {
         hizInfo.imageView = m_hizBuffers[i] ? m_hizBuffers[i]->sampledImageView() : m_albedoTexture->imageView();
         hizInfo.sampler = m_hizBuffers[i] ? m_hizBuffers[i]->sampler() : m_albedoTexture->sampler();
 
-        std::array<VkWriteDescriptorSet, 7> writes{};
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = m_textureManager->getProceduralBrickNormal()->imageView();
+        normalInfo.sampler = m_textureManager->getProceduralBrickNormal()->sampler();
+
+        VkDescriptorImageInfo metalRoughInfo{};
+        metalRoughInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        metalRoughInfo.imageView = m_textureManager->getProceduralMetalRough()->imageView();
+        metalRoughInfo.sampler = m_textureManager->getProceduralMetalRough()->sampler();
+
+        VkDescriptorImageInfo aoInfo{};
+        aoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        aoInfo.imageView = m_textureManager->getDefaultWhiteAo()->imageView();
+        aoInfo.sampler = m_textureManager->getDefaultWhiteAo()->sampler();
+
+        VkDescriptorImageInfo emissiveInfo{};
+        emissiveInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        emissiveInfo.imageView = m_textureManager->getProceduralEmissive()->imageView();
+        emissiveInfo.sampler = m_textureManager->getProceduralEmissive()->sampler();
+
+        std::array<VkWriteDescriptorSet, 11> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = m_cameraDescriptorSets[i];
         writes[0].dstBinding = 0;
@@ -547,6 +605,34 @@ void Renderer::createCameraDescriptorResources() {
         writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[6].descriptorCount = 1;
         writes[6].pImageInfo = &hizInfo;
+
+        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet = m_cameraDescriptorSets[i];
+        writes[7].dstBinding = 9;
+        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[7].descriptorCount = 1;
+        writes[7].pImageInfo = &normalInfo;
+
+        writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[8].dstSet = m_cameraDescriptorSets[i];
+        writes[8].dstBinding = 10;
+        writes[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[8].descriptorCount = 1;
+        writes[8].pImageInfo = &metalRoughInfo;
+
+        writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[9].dstSet = m_cameraDescriptorSets[i];
+        writes[9].dstBinding = 11;
+        writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[9].descriptorCount = 1;
+        writes[9].pImageInfo = &aoInfo;
+
+        writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[10].dstSet = m_cameraDescriptorSets[i];
+        writes[10].dstBinding = 12;
+        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[10].descriptorCount = 1;
+        writes[10].pImageInfo = &emissiveInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
@@ -966,8 +1052,24 @@ void Renderer::createGpuPipelines() {
             m_depthBuffer->format(),
             m_cameraDescriptorSetLayout,
             kIndirectVertShaderPath,
-            kFragShaderPath
+            kFragShaderPath,
+            VK_POLYGON_MODE_FILL,
+            VK_CULL_MODE_BACK_BIT
         );
+
+        if (m_context.getDevice().isFillModeNonSolidSupported()) {
+            m_pipelineWireframe = std::make_unique<GraphicsPipeline>(
+                m_context.getDevice().getLogicalDevice(),
+                m_swapchain->getImageFormat(),
+                m_depthBuffer->format(),
+                m_cameraDescriptorSetLayout,
+                kIndirectVertShaderPath,
+                kFragShaderPath,
+                VK_POLYGON_MODE_LINE,
+                VK_CULL_MODE_NONE
+            );
+            SIDERA_LOG_INFO("Pipeline", "Created dedicated wireframe graphics pipeline (VK_POLYGON_MODE_LINE).");
+        }
 
         createShadowPipelineVariant(
             kShadowIndirectVertShaderPath,
@@ -994,6 +1096,7 @@ void Renderer::destroyGpuResources() noexcept {
     }
 
     m_pipelineIndirect.reset();
+    m_pipelineWireframe.reset();
 
     if (m_shadowIndirectPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_shadowIndirectPipeline, nullptr);
@@ -1421,7 +1524,7 @@ void Renderer::createSceneMeshes() {
         .mesh = m_groundMesh.get(),
         .position = {0.0f, -0.60f, 0.0f},
         .albedo = {0.95f, 0.95f, 0.95f},
-        .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f
+        .metallic = 0.0f, .roughness = 0.85f, .ao = 1.0f, .textureStrength = 1.0f, .normalMapStrength = 0.85f
     });
 
     // 2. Centerpiece Turbine 1: Machined Titanium
@@ -1608,7 +1711,9 @@ void Renderer::createSceneMeshes() {
             .metallic = obj.metallic,
             .roughness = obj.roughness,
             .ao = obj.ao,
-            .textureStrength = obj.textureStrength
+            .textureStrength = obj.textureStrength,
+            .emissive = obj.emissive,
+            .normalMapStrength = obj.normalMapStrength
         };
         Instance inst{};
         inst.transform = obj.computeModelMatrix();
@@ -1962,81 +2067,100 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     vkCmdBeginRendering(cmd, &renderingInfo);
 
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(extent.width);
-    viewport.height = static_cast<float>(extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    m_mainApiDrawCalls = 0;
+    m_commandsSubmitted = 0;
 
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = extent;
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    for (const auto& vp : m_viewportManager.getViewports()) {
+        vkCmdSetViewport(cmd, 0, 1, &vp.vkViewport);
+        vkCmdSetScissor(cmd, 0, 1, &vp.vkScissor);
 
-    if (isGpuDrivenActive()) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineIndirect->getHandle());
-
-        vkCmdBindDescriptorSets(
-            cmd,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_pipelineIndirect->getLayout(),
-            0,
-            1,
-            &m_cameraDescriptorSets[m_currentFrame],
-            0,
-            nullptr
+        const glm::vec4 vpParams(
+            static_cast<float>(vp.mode),
+            static_cast<float>(vp.normalSpace),
+            m_camera.getNearPlane(),
+            m_camera.getFarPlane()
         );
 
-        m_mainApiDrawCalls = m_gpuScene->recordIndirectDraws(cmd, m_currentFrame, false /* isShadow */);
-        m_commandsSubmitted = m_gpuScene->getObjectCount();
-    } else {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->getHandle());
-
-        vkCmdBindDescriptorSets(
-            cmd,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_pipeline->getLayout(),
-            0,
-            1,
-            &m_cameraDescriptorSets[m_currentFrame],
-            0,
-            nullptr
-        );
-
-        m_mainApiDrawCalls = 0;
-        const Mesh* lastBoundMesh = nullptr;
-        for (const auto& obj : m_renderObjects) {
-            if (!obj.mesh) {
-                continue;
+        if (isGpuDrivenActive()) {
+            VkPipeline activePipeline = m_pipelineIndirect->getHandle();
+            if (vp.mode == ViewportMode::Wireframe && m_pipelineWireframe) {
+                activePipeline = m_pipelineWireframe->getHandle();
             }
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
-            const MeshPushConstants pushData{
-                .model = obj.computeModelMatrix(),
-                .albedoMetallic = glm::vec4(obj.albedo, obj.metallic),
-                .roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, 0.0f)
-            };
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineIndirect->getLayout(),
+                0,
+                1,
+                &m_cameraDescriptorSets[m_currentFrame],
+                0,
+                nullptr
+            );
 
+            MeshPushConstants pc{};
+            pc.viewportParams = vpParams;
             vkCmdPushConstants(
                 cmd,
-                m_pipeline->getLayout(),
+                m_pipelineIndirect->getLayout(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
                 sizeof(MeshPushConstants),
-                &pushData
+                &pc
             );
 
-            if (obj.mesh != lastBoundMesh) {
-                obj.mesh->bind(cmd);
-                lastBoundMesh = obj.mesh;
+            m_mainApiDrawCalls += m_gpuScene->recordIndirectDraws(cmd, m_currentFrame, false /* isShadow */);
+            m_commandsSubmitted = m_gpuScene->getObjectCount();
+        } else {
+            VkPipeline activePipeline = m_pipeline->getHandle();
+            if (vp.mode == ViewportMode::Wireframe && m_pipelineWireframe) {
+                activePipeline = m_pipelineWireframe->getHandle();
             }
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
-            obj.mesh->draw(cmd);
-            ++m_mainApiDrawCalls;
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipeline->getLayout(),
+                0,
+                1,
+                &m_cameraDescriptorSets[m_currentFrame],
+                0,
+                nullptr
+            );
+
+            const Mesh* lastBoundMesh = nullptr;
+            for (const auto& obj : m_renderObjects) {
+                if (!obj.mesh) {
+                    continue;
+                }
+
+                const MeshPushConstants pushData{
+                    .model = obj.computeModelMatrix(),
+                    .albedoMetallic = glm::vec4(obj.albedo, obj.metallic),
+                    .roughnessAoTex = glm::vec4(obj.roughness, obj.ao, obj.textureStrength, obj.normalMapStrength),
+                    .viewportParams = vpParams
+                };
+
+                vkCmdPushConstants(
+                    cmd,
+                    m_pipeline->getLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    sizeof(MeshPushConstants),
+                    &pushData
+                );
+
+                if (obj.mesh != lastBoundMesh) {
+                    obj.mesh->bind(cmd);
+                    lastBoundMesh = obj.mesh;
+                }
+
+                obj.mesh->draw(cmd);
+                ++m_mainApiDrawCalls;
+            }
         }
-        m_commandsSubmitted = 0;
     }
 
     vkCmdEndRendering(cmd);
@@ -2143,6 +2267,7 @@ void Renderer::recreateSwapchain(Window& window) {
     m_frameSync->resizeRenderFinishedSemaphores(m_swapchain->getImageCount());
 
     m_camera.setViewportSize(newExtent.width, newExtent.height);
+    m_viewportManager.updateExtents(newExtent.width, newExtent.height);
     SIDERA_LOG_INFO(
         "Camera",
         "Updated camera aspect ratio to {:.3f} ({}x{} px).",
@@ -2174,6 +2299,22 @@ void Renderer::recreateSwapchain(Window& window) {
     }
 
     window.resetResizedFlag();
+}
+
+void Renderer::cycleViewportMode() {
+    m_viewportManager.cycleActiveViewportMode();
+}
+
+void Renderer::setViewportMode(ViewportMode mode) {
+    m_viewportManager.setActiveViewportMode(mode);
+}
+
+void Renderer::toggleSplitView() {
+    m_viewportManager.toggleSplit();
+}
+
+void Renderer::toggleNormalSpace() {
+    m_viewportManager.toggleNormalSpace();
 }
 
 } // namespace sidera

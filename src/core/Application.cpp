@@ -9,7 +9,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.16.0";
+constexpr std::string_view kEngineVersion = "v0.17.0";
 } // namespace
 
 Application::Application(const ApplicationConfig& config)
@@ -52,6 +52,15 @@ Application::Application(const ApplicationConfig& config)
     }
     if (m_config.cameraYaw && m_config.cameraPitch) {
         m_renderer.getCamera().setOrientation(*m_config.cameraYaw, *m_config.cameraPitch);
+    }
+    if (m_config.splitView) {
+        m_renderer.toggleSplitView();
+    }
+    if (m_config.viewportMode != ViewportMode::Lit) {
+        m_renderer.setViewportMode(m_config.viewportMode);
+    }
+    if (m_config.normalSpace != 0) {
+        m_renderer.toggleNormalSpace();
     }
     SIDERA_LOG_INFO("Core", "SIDERA Engine initialized.");
 }
@@ -142,9 +151,24 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         }
     }
 
+    const auto& vpMgr = m_renderer.getViewportManager();
+    const auto& activeVp = vpMgr.getActiveViewport();
+    const auto texStats = m_renderer.getTextureManager().getStats();
+
+    const std::string vpInfo = std::format(
+        " | VIEWPORT: {} ({}{}) | TEXTURES: {} (mips {}, {:.2f} MB, {} hits)",
+        getViewportModeName(activeVp.mode),
+        getViewportLayoutName(vpMgr.getLayout()),
+        activeVp.mode == ViewportMode::Normals ? (activeVp.normalSpace == 0 ? ", WORLD" : ", VIEW") : "",
+        texStats.totalTextures,
+        texStats.totalMipLevels,
+        static_cast<double>(texStats.gpuMemoryUsageBytes) / (1024.0 * 1024.0),
+        texStats.cacheHits
+    );
+
     const std::string title = std::format(
         "SIDERA {} [{}] | {:.1f} FPS (target {}) | {:.2f} ms | 1% low {:.1f} | "
-        "{}x{} {} | {}{}{}{} | limiter {}{}{}",
+        "{}x{} {} | {}{}{}{} | limiter {}{}{}{}",
         kEngineVersion,
         isGpu ? "GPU-INSTANCING" : "CPU-DRIVEN",
         r.fps,
@@ -158,7 +182,8 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
         m_renderer.isShadowsEnabled() ? std::format(" | {}", shadowInfo) : "",
         m_limiterEnabled ? "ON" : "OFF",
         m_renderer.isStressTestMode() ? " | STRESS MODE" : "",
-        std::format(" | INSTANCING: {}", instancingModeStr)
+        std::format(" | INSTANCING: {}", instancingModeStr),
+        vpInfo
     );
     m_window.setTitle(title);
 
@@ -174,7 +199,7 @@ Application::~Application() {
 void Application::run() {
     SIDERA_LOG_INFO(
         "Core",
-        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, ESC exit)."
+        "Entering frame loop (WASD/EQ move, Hold Right-Click look, F3 stats, F4 limiter, F5 stress, F6 shadows, F7 shadow dbg, F8 GPU/CPU mode, F9 Frustum cull, F10 Occlusion cull, F11 Hi-Z dbg, F12 Instancing, V Viewport Mode, B Normal Space, T Split View, ESC exit)."
     );
 
     const auto startTime = std::chrono::steady_clock::now();
@@ -186,6 +211,7 @@ void Application::run() {
     bool testedMinimize = false;
     bool testedRestore = false;
     bool testedResizeStep2 = false;
+    bool testedViewportModes = false;
     bool f3WasDown = false;
     bool f4WasDown = false;
     bool f5WasDown = false;
@@ -196,6 +222,9 @@ void Application::run() {
     bool f10WasDown = false;
     bool f11WasDown = false;
     bool f12WasDown = false;
+    bool vWasDown = false;
+    bool bWasDown = false;
+    bool tWasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -204,7 +233,7 @@ void Application::run() {
 
         m_window.pollEvents();
 
-        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing
+        // F3: stats, F4: limiter, F5: stress, F6: shadows, F7: shadow dbg, F8: GPU/CPU mode, F9: frustum culling, F10: occlusion culling, F11: Hi-Z dbg, F12: Instancing, V: Viewport mode, B: Normal space, T: Split view
         const bool f3Down = m_window.isKeyPressed(GLFW_KEY_F3);
         const bool f4Down = m_window.isKeyPressed(GLFW_KEY_F4);
         const bool f5Down = m_window.isKeyPressed(GLFW_KEY_F5);
@@ -215,6 +244,9 @@ void Application::run() {
         const bool f10Down = m_window.isKeyPressed(GLFW_KEY_F10);
         const bool f11Down = m_window.isKeyPressed(GLFW_KEY_F11);
         const bool f12Down = m_window.isKeyPressed(GLFW_KEY_F12);
+        const bool vDown = m_window.isKeyPressed(GLFW_KEY_V);
+        const bool bDown = m_window.isKeyPressed(GLFW_KEY_B);
+        const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
 
         if (f3Down && !f3WasDown) {
             m_statsEnabled = !m_statsEnabled;
@@ -277,6 +309,18 @@ void Application::run() {
             m_renderer.cycleInstancingMode();
             m_frameStats.reset();
         }
+        if (vDown && !vWasDown) {
+            m_renderer.cycleViewportMode();
+            m_frameStats.reset();
+        }
+        if (bDown && !bWasDown) {
+            m_renderer.toggleNormalSpace();
+            m_frameStats.reset();
+        }
+        if (tDown && !tWasDown) {
+            m_renderer.toggleSplitView();
+            m_frameStats.reset();
+        }
         f3WasDown = f3Down;
         f4WasDown = f4Down;
         f5WasDown = f5Down;
@@ -287,6 +331,9 @@ void Application::run() {
         f10WasDown = f10Down;
         f11WasDown = f11Down;
         f12WasDown = f12Down;
+        vWasDown = vDown;
+        bWasDown = bDown;
+        tWasDown = tDown;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);
@@ -369,7 +416,15 @@ void Application::run() {
                 testedResizeStep2 = true;
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Resizing window back to 1920x1080 (1080p default)...");
                 m_window.setSize(1920, 1080);
-            } else if (elapsed >= std::chrono::milliseconds(2250)) {
+            } else if (!testedViewportModes && elapsed >= std::chrono::milliseconds(2050)) {
+                testedViewportModes = true;
+                SIDERA_LOG_INFO("Core", "[SmokeTest] Cycling viewport rendering modes & split view...");
+                m_renderer.cycleViewportMode();
+                m_renderer.toggleNormalSpace();
+                m_renderer.toggleSplitView();
+                m_renderer.toggleSplitView();
+                m_renderer.setViewportMode(ViewportMode::Lit);
+            } else if (elapsed >= std::chrono::milliseconds(2500)) {
                 SIDERA_LOG_INFO("Core", "[SmokeTest] Frame loop verification complete; requesting close.");
                 m_window.requestClose();
             }

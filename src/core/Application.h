@@ -3,6 +3,7 @@
 #include "core/FrameStats.h"
 #include "core/Window.h"
 #include "renderer/Renderer.h"
+#include "renderer/Viewport.h"
 #include "renderer/vulkan/VulkanContext.h"
 
 #include <glm/vec3.hpp>
@@ -17,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.16.0 - GPU Instancing",
+        .title = "SIDERA Engine v0.17.0 - Advanced Texture System & Viewport Modes",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -36,6 +37,9 @@ struct ApplicationConfig {
     bool occlusionCulling = true;  // --occlusion-culling / --no-occlusion-culling
     bool showHiZ = false;          // --show-hiz: Hi-Z depth map debug visualization
     uint32_t instanceCount = 0;    // --instances <N> (0 = normal, 1, 100, 1000, 10000)
+    ViewportMode viewportMode = ViewportMode::Lit; // --viewport-mode <mode>
+    bool splitView = false;        // --split-view: dual viewport split screen
+    uint32_t normalSpace = 0;      // --normal-space <world|view> (0 = world, 1 = view)
     std::optional<glm::vec3> cameraPos;
     std::optional<float> cameraYaw;
     std::optional<float> cameraPitch;

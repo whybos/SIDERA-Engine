@@ -14,10 +14,14 @@ GraphicsPipeline::GraphicsPipeline(VkDevice device,
                                    VkFormat depthAttachmentFormat,
                                    VkDescriptorSetLayout descriptorSetLayout,
                                    const std::filesystem::path& vertSpvPath,
-                                   const std::filesystem::path& fragSpvPath)
+                                   const std::filesystem::path& fragSpvPath,
+                                   VkPolygonMode polygonMode,
+                                   VkCullModeFlags cullMode)
     : m_device(device)
     , m_colorFormat(colorAttachmentFormat)
-    , m_depthFormat(depthAttachmentFormat) {
+    , m_depthFormat(depthAttachmentFormat)
+    , m_polygonMode(polygonMode)
+    , m_cullMode(cullMode) {
     try {
         createPipeline(descriptorSetLayout, vertSpvPath, fragSpvPath);
     } catch (...) {
@@ -87,9 +91,9 @@ void GraphicsPipeline::createPipeline(VkDescriptorSetLayout descriptorSetLayout,
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.polygonMode = m_polygonMode;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.cullMode = m_cullMode;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 

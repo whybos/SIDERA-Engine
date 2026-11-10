@@ -41,6 +41,13 @@ public:
     [[nodiscard]] bool isMultiDrawIndirectEnabled() const noexcept { return m_multiDrawIndirectEnabled; }
     [[nodiscard]] bool isDrawIndirectFirstInstanceEnabled() const noexcept { return m_drawIndirectFirstInstanceEnabled; }
     [[nodiscard]] bool isDrawIndirectCountSupported() const noexcept { return m_drawIndirectCountSupported; }
+    [[nodiscard]] bool isFillModeNonSolidSupported() const noexcept { return m_fillModeNonSolidEnabled; }
+    [[nodiscard]] bool isTextureCompressionBCSupported() const noexcept { return m_textureCompressionBCEnabled; }
+    [[nodiscard]] bool isDescriptorIndexingSupported() const noexcept { return m_descriptorIndexingSupported; }
+
+    [[nodiscard]] VkFormatProperties getFormatProperties(VkFormat format) const noexcept;
+    [[nodiscard]] bool isFormatSupported(VkFormat format, VkFormatFeatureFlags flags) const noexcept;
+    [[nodiscard]] bool isLinearBlitSupported(VkFormat format) const noexcept;
 
 private:
     void pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface);
@@ -63,6 +70,9 @@ private:
     bool m_multiDrawIndirectEnabled = false;
     bool m_drawIndirectFirstInstanceEnabled = false;
     bool m_drawIndirectCountSupported = false;
+    bool m_fillModeNonSolidEnabled = false;
+    bool m_textureCompressionBCEnabled = false;
+    bool m_descriptorIndexingSupported = false;
 
     static const std::vector<const char*> s_requiredDeviceExtensions;
 };
