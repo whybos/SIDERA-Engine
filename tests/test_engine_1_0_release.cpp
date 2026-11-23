@@ -27,9 +27,9 @@ void testEngineVersion() {
     std::cout << "\n--- 1. Engine 1.0 Version Identity ---\n";
     const auto v = getEngineVersion();
     check(v.major == 1 && v.minor == 0 && v.patch == 0, "Semantic version is 1.0.0");
-    check(v.prerelease == "rc1", "Prerelease tag is rc1");
-    check(kSideraVersionString == "1.0.0-rc1", "Version string is 1.0.0-rc1");
-    check(kSideraEngineBanner == "SIDERA Engine 1.0.0-rc1", "Engine banner matches SIDERA Engine 1.0.0-rc1");
+    check(v.prerelease.empty(), "Final release has empty prerelease tag");
+    check(kSideraVersionString == "1.0.0", "Version string is 1.0.0");
+    check(kSideraEngineBanner == "SIDERA Engine 1.0.0", "Engine banner matches SIDERA Engine 1.0.0");
 }
 
 void testFormatCompatibilityAndMigration() {

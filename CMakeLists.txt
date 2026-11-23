@@ -147,6 +147,8 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_bloom.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_ssao.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_tonemap.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_quad.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_quad.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_inject.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_temporal.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_integrate.comp
@@ -217,6 +219,8 @@ set(SIDERA_SOURCES
     src/renderer/Camera.cpp
     src/renderer/Renderer.h
     src/renderer/Renderer.cpp
+    src/renderer/UIRenderer.h
+    src/renderer/UIRenderer.cpp
     src/renderer/vulkan/VulkanCheck.h
     src/renderer/vulkan/VulkanInstance.h
     src/renderer/vulkan/VulkanInstance.cpp
@@ -1694,10 +1698,40 @@ if(SIDERA_BUILD_EDITOR)
             glm::glm
     )
 
+    # Dear ImGui (docking branch) — strictly isolated to Editor (never linked into Runtime)
+    FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        docking
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(imgui)
+
+    add_library(imgui_vulkan STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    )
+    target_include_directories(imgui_vulkan
+        PUBLIC
+            ${imgui_SOURCE_DIR}
+            ${imgui_SOURCE_DIR}/backends
+    )
+    target_link_libraries(imgui_vulkan
+        PUBLIC
+            glfw
+            Vulkan::Vulkan
+    )
+
     add_executable(sidera_editor
         src/editor/editor_main.cpp
+        src/editor/EditorGuiApp.h
+        src/editor/EditorGuiApp.cpp
     )
-    target_link_libraries(sidera_editor PRIVATE sidera_editor_core)
+    target_link_libraries(sidera_editor PRIVATE sidera_editor_core imgui_vulkan)
 
     add_executable(test_editor_core
         tests/test_editor_core.cpp
@@ -1797,18 +1831,21 @@ install(FILES
     README.md
     docs/THIRD_PARTY_LICENSES.md
     docs/releases/SIDERA_ENGINE_1_0_RC1.md
+    docs/releases/SIDERA_ENGINE_1_0_0_FINAL.md
     docs/guides/SIDERA_BUILD_RUN_AND_PUBLISH_GUIDE.md
+    docs/guides/SIDERA_CLI_REFERENCE.md
     DESTINATION docs
 )
 install(FILES
     scripts/Install-SIDERA.ps1
     scripts/Uninstall-SIDERA.ps1
+    scripts/Build-SideraGame.ps1
     DESTINATION scripts
 )
 
 set(CPACK_PACKAGE_NAME "SIDERA")
 set(CPACK_PACKAGE_VENDOR "SIDERA Engine")
-set(CPACK_PACKAGE_VERSION "1.0.0-rc1")
-set(CPACK_PACKAGE_FILE_NAME "SIDERA-1.0.0-rc1-win64")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_FILE_NAME "SIDERA-1.0.0-win64")
 set(CPACK_GENERATOR "ZIP")
 include(CPack)

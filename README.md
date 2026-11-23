@@ -1,11 +1,16 @@
-# SIDERA Engine 1.0 (`1.0.0-rc1`)
+# SIDERA Engine 1.0.0
 
-**SIDERA** is a modular, C++20, CMake-based **Vulkan 1.3** 3D game engine organized into four cleanly separated layers:
+**SIDERA** is a modular, C++20, CMake-based **Vulkan 1.3** 3D game engine and interactive development platform organized into four cleanly separated layers:
 
-1. **SIDERA Engine Core** (`src/core`, `src/renderer`, `src/scene`, `src/assets`, `src/physics`, `src/audio`, `src/runtime`, `src/memory`, `src/streaming`, `src/profiling`)
-2. **Reusable Game Frameworks** (`src/framework`) — optional RPG/Adventure systems (Character/Camera, Dialogue/Narrative, Quests, NPCs/Companions, Inventory/Equipment/Attributes/Progression, optional Combat, World Time/Events)
-3. **Integrated Editor & Tools** (`src/editor`) — decoupled Editor Core, project management, command/undo-redo, and content editor services
-4. **Individual Game Projects** (`examples/rpg_reference_project`) — completely decoupled from Engine Core
+1. **SIDERA Engine Core** (`src/core`, `src/renderer`, `src/scene`, `src/assets`, `src/physics`, `src/audio`, `src/runtime`, `src/memory`, `src/streaming`, `src/profiling`) — including native Vulkan 2D Runtime UI rendering (`src/renderer/UIRenderer.cpp`) with zero Dear ImGui dependency.
+2. **Interactive Graphical SIDERA Editor** (`src/editor`) — GLFW + Vulkan + Dear ImGui Docking workspace (Welcome/Project Browser, 3D Scene Viewport with orbit/picking/gizmos/snapping, Hierarchy, Inspector with Undo/Redo, Asset Browser, Material & Lighting, World/Audio/RPG Tools, Console & Profiler).
+3. **Reusable Game Frameworks** (`src/framework`) — optional RPG/Adventure systems (Character/Camera, Dialogue/Narrative, Quests, NPCs/Companions, Inventory/Equipment/Attributes/Progression, optional Combat, World Time/Events).
+4. **Individual Game Projects** (`examples/rpg_reference_project`) — completely decoupled from Engine Core, buildable into standalone distributable games via `scripts/Build-SideraGame.ps1`.
+
+---
+
+## Interactive SIDERA Editor (`1.0.0`)
+![SIDERA Engine 1.0.0 Graphical Editor](docs/screenshots/sidera_editor_1_0_gui.png)
 
 ---
 
@@ -21,36 +26,24 @@ $cmake = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\Co
 & $cmake -S . -B build
 & $cmake --build build --config Release --target sidera sidera_editor test_engine_1_0_release test_rpg_framework -j
 
-# Run Runtime (Forward+ smoke test)
-Push-Location .\build\Release
-.\sidera.exe --smoke-test --render-path forward_plus
-Pop-Location
-
-# Run Editor with Reference Project
+# Launch Interactive Graphical SIDERA Editor
 .\build\Release\sidera_editor.exe --open-project .\examples\rpg_reference_project
 
-# Run Release & Framework Validation Tests
-.\build\Release\test_engine_1_0_release.exe
-.\build\Release\test_rpg_framework.exe
+# Launch SIDERA Runtime (Forward+ with live Vulkan 2D Runtime HUD)
+Push-Location .\build\Release
+.\sidera.exe --render-path forward_plus
+Pop-Location
+
+# Build a Standalone Distributable Game
+.\scripts\Build-SideraGame.ps1 -ProjectDir .\examples\rpg_reference_project -EngineBinDir .\build\Release -OutputDir .\build\dist_rpg_game
 ```
 
 ---
 
 ## Documentation
+- **Final Release Notes (`1.0.0`)**: [docs/releases/SIDERA_ENGINE_1_0_0_FINAL.md](docs/releases/SIDERA_ENGINE_1_0_0_FINAL.md)
+- **CLI Command Reference**: [docs/guides/SIDERA_CLI_REFERENCE.md](docs/guides/SIDERA_CLI_REFERENCE.md)
 - **Build, Run, Package & GitHub Publish Guide**: [docs/guides/SIDERA_BUILD_RUN_AND_PUBLISH_GUIDE.md](docs/guides/SIDERA_BUILD_RUN_AND_PUBLISH_GUIDE.md)
-- **Release Notes (`1.0.0-rc1`)**: [docs/releases/SIDERA_ENGINE_1_0_RC1.md](docs/releases/SIDERA_ENGINE_1_0_RC1.md)
+- **End-User Acceptance Test Plan**: [docs/quality/SIDERA_1_0_END_USER_ACCEPTANCE_TEST_PLAN.md](docs/quality/SIDERA_1_0_END_USER_ACCEPTANCE_TEST_PLAN.md)
 - **Complete M01–M42 Milestone Audit**: [docs/quality/SIDERA_M01_M42_COMPLETE_MILESTONE_AUDIT.md](docs/quality/SIDERA_M01_M42_COMPLETE_MILESTONE_AUDIT.md)
 - **Third-Party Licenses**: [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md)
-- **Milestone 42 Report**: [docs/milestones/milestone_42_sidera_engine_1_0.md](docs/milestones/milestone_42_sidera_engine_1_0.md)
-
----
-
-## Known Limitations (`1.0.0-rc1`)
-- `sidera_editor.exe` currently runs its Editor Core & Content Editor services in CLI/headless mode; interactive Dear ImGui Vulkan viewport/docking GUI rendering is pending.
-- `UISystem` generates DPI-scaled `UIDrawCommand` batches; Vulkan 2D quad/font rasterization in `Renderer` is pending.
-- Only Windows x64 (MSVC 2022) has been built and verified.
-
----
-
-## License
-Third-party dependency licenses are documented in [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md).

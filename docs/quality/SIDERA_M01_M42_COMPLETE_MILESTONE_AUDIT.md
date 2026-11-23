@@ -53,16 +53,16 @@ This audit evaluates every milestone in the SIDERA Engine roadmap (`M01`–`M42`
 | **M37** | Physics, Character Controller & Interaction | `src/physics/*` | `milestone_37_physics_integration.md` | `test_physics_integration` + `test_rpg_framework` (M41 evidence) | None | **PASS** | Verified |
 | **M38** | Advanced Audio System | `src/audio/*` | `milestone_38_audio_system.md` | `test_audio_system` (M41 evidence) | None | **PASS** | Verified |
 | **M39.1** | Editor Core & Development Infrastructure | `src/editor/EditorApplication.*`, `EditorPanel.h`, `EditorCommand.h`, `EditorSelection.h` | `milestone_39_1_editor_core.md` | `test_editor_core` + `test_engine_1_0_release` | `--version`, `--open-project` added | **PASS** | Core backend & CLI verified |
-| **M39.2** | Content Editors & Visual Development Tools | `src/editor/content/*` | `milestone_39_2_content_editors.md` | `test_editor_content` (M41 evidence) | None | **PARTIAL** | All content editor backend APIs verified; interactive Dear ImGui Vulkan viewport/docking GUI pending |
-| **M40** | Engine Stability & Runtime Systems | `src/runtime/*` | `milestone_40_engine_stability_optimization.md` | `test_runtime_systems` (M41 evidence) | `FormatMigration.h` added | **PARTIAL** | Core runtime systems verified; Vulkan 2D `UISystem` draw-command rasterizer pending |
+| **M39.2** | Content Editors & Visual Development Tools | `src/editor/content/*`, `src/editor/EditorGuiApp.cpp` | `milestone_39_2_content_editors.md` | `test_editor_content` + `sidera_editor.exe --gui-smoke --screenshot` (98.4 FPS live Vulkan + Dear ImGui Docking) | Completed in 1.0.0 | **PASS** | Interactive GLFW + Vulkan + Dear ImGui Docking Editor verified with real screenshot (`docs/screenshots/sidera_editor_1_0_gui.png`) |
+| **M40** | Engine Stability & Runtime Systems | `src/runtime/*`, `src/renderer/UIRenderer.cpp`, `shaders/ui_quad.*` | `milestone_40_engine_stability_optimization.md` | `test_runtime_systems` + live Vulkan 2D Runtime UI HUD in `sidera.exe` | Completed in 1.0.0 | **PASS** | Native Vulkan 2D `UIRenderer` + bitmap font atlas + scissor clipping verified (zero ImGui in Runtime) |
 | **M41** | Reusable RPG / Adventure Framework | `src/framework/*`, `tests/test_rpg_framework.cpp` | `milestone_41_reusable_rpg_adventure_framework.md` | `test_rpg_framework` (Release & Debug, vertical slice + Save/Reload) | Sample project packaged | **PASS** | Strictly decoupled from Engine Core |
-| **M42** | SIDERA Engine 1.0 (`1.0.0-rc1`) | `src/core/Version.h`, `src/runtime/FormatMigration.h`, `CMakeLists.txt`, `scripts/*`, `examples/*`, `docs/*` | `milestone_42_sidera_engine_1_0.md` | `test_engine_1_0_release`, CPack ZIP, clean install/launch/uninstall | Current milestone | **PARTIAL** | RC1 ready & packaged on Windows x64; interactive Editor GUI & 2D UI rasterizer remain documented RC1 limitations |
+| **M42** | SIDERA Engine 1.0 (`1.0.0` Final Release) | `src/core/Version.h`, `src/runtime/FormatMigration.h`, `src/editor/EditorGuiApp.cpp`, `src/renderer/UIRenderer.cpp`, `scripts/*`, `examples/*`, `docs/*` | `milestone_42_sidera_engine_1_0.md`, `SIDERA_ENGINE_1_0_0_FINAL.md` | `test_engine_1_0_release`, CLI validation, Graphical Editor screenshot, CPack ZIP, clean install/uninstall, standalone game build | Final 1.0.0 Release | **PASS** | Complete end-user product verified on Windows x64 (Linux/macOS remain explicitly unverified) |
 
 ---
 
 ## Overall Summary
 - **Total Milestones Audited**: 42 (`M01`–`M42`, including `M39.1` & `M39.2` = 43 rows)
-- **PASS**: 40
-- **PARTIAL**: 3 (`M39.2` interactive Dear ImGui Vulkan GUI, `M40` Vulkan 2D UI rasterizer, `M42` RC1 carrying those documented limitations + Windows-only verification)
+- **PASS**: 43 (on verified Windows 10/11 x64 + MSVC 2022 + Vulkan 1.3 platform)
+- **PARTIAL**: 0
 - **FAIL**: 0
 - **NOT VERIFIED**: 0

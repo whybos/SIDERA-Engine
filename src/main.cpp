@@ -191,6 +191,18 @@ int main(int argc, char* argv[]) {
             else if (wp == "desert") config.worldPreset = sidera::WorldPreset::DesertWorld;
             else if (wp == "alpine") config.worldPreset = sidera::WorldPreset::AlpineWorld;
             else config.worldPreset = sidera::WorldPreset::Balanced;
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout
+                << sidera::kSideraEngineBanner << " — Runtime\n"
+                << "Usage: sidera [options]\n"
+                << "  --help                          Show this help message and exit\n"
+                << "  --version                       Print engine version and exit\n"
+                << "  --smoke-test                    Run automated GPU smoke test and exit\n"
+                << "  --render-path <forward|deferred|forward_plus>  Select rendering path\n"
+                << "  --width <px> --height <px>      Set window resolution\n"
+                << "  --stats                         Start with performance overlay enabled\n"
+                << "  --stress-test                   Enable high-poly stress scene\n";
+            return EXIT_SUCCESS;
         } else if (arg == "--version") {
             std::cout << sidera::kSideraEngineBanner << "\n";
             return EXIT_SUCCESS;
@@ -198,7 +210,14 @@ int main(int argc, char* argv[]) {
             const std::string_view rp(argv[++i]);
             if (rp == "forward") config.renderPath = sidera::RenderPath::Forward;
             else if (rp == "deferred") config.renderPath = sidera::RenderPath::Deferred;
-            else config.renderPath = sidera::RenderPath::ForwardPlus;
+            else if (rp == "forward_plus" || rp == "forward-plus") config.renderPath = sidera::RenderPath::ForwardPlus;
+            else {
+                std::cerr << "[SIDERA] Error: invalid --render-path '" << rp << "' (expected forward|deferred|forward_plus).\n";
+                return 2;
+            }
+        } else {
+            std::cerr << "[SIDERA] Error: unknown or incomplete argument '" << arg << "'. Use --help for usage.\n";
+            return 2;
         }
     }
 

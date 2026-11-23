@@ -175,7 +175,8 @@ Renderer::Renderer(const VulkanContext& context,
             m_hizBuffers[i].reset();
             m_hizValid[i] = false;
         }
-        destroySceneMeshes();
+        m_uiRenderer.shutdown();
+    destroySceneMeshes();
         destroyGpuResources();
         destroyShadowPipeline();
         m_pipeline.reset();
@@ -225,6 +226,50 @@ Renderer::Renderer(const VulkanContext& context,
         m_renderMode == RenderMode::Gpu ? "GPU-DRIVEN (compute-generated indirect draws)" : "CPU-DRIVEN (direct draws)",
         isGpuDrivenAvailable() ? "available" : "unavailable"
     );
+
+    // Initialize Vulkan 2D Runtime UI Renderer & Reference Game HUD (zero Editor/ImGui dependency)
+    if (m_uiRenderer.init(m_context, m_swapchain->getImageFormat(), m_depthBuffer->format())) {
+        using namespace sidera::runtime;
+        const uint64_t hudPanel = m_runtimeUI.createWidget({
+            .type = UIWidgetType::Panel, .name = "HUDPanel",
+            .localRect = {18.0f, 18.0f, 360.0f, 126.0f},
+            .color = {0.06f, 0.09f, 0.14f, 0.78f}
+        });
+        m_runtimeUI.createWidget({
+            .parentId = hudPanel, .type = UIWidgetType::Text, .name = "TitleText",
+            .text = "SIDERA ENGINE 1.0.0 - RUNTIME HUD",
+            .localRect = {12.0f, 10.0f, 340.0f, 20.0f},
+            .color = {0.35f, 0.82f, 1.0f, 1.0f}
+        });
+        m_runtimeUI.createWidget({
+            .parentId = hudPanel, .type = UIWidgetType::Text, .name = "QuestText",
+            .text = "QUEST: FIND BEACON RELIC (0/1)",
+            .localRect = {12.0f, 36.0f, 340.0f, 20.0f},
+            .color = {0.95f, 0.92f, 0.70f, 1.0f}
+        });
+        m_runtimeUI.createWidget({
+            .parentId = hudPanel, .type = UIWidgetType::ProgressBar, .name = "HealthBar",
+            .text = "HP 100/100",
+            .localRect = {12.0f, 64.0f, 336.0f, 22.0f},
+            .color = {0.82f, 0.22f, 0.26f, 0.95f},
+            .value = 1.0f
+        });
+        m_runtimeUI.createWidget({
+            .parentId = hudPanel, .type = UIWidgetType::ProgressBar, .name = "FocusBar",
+            .text = "FOCUS 85%",
+            .localRect = {12.0f, 94.0f, 336.0f, 20.0f},
+            .color = {0.22f, 0.62f, 0.95f, 0.95f},
+            .value = 0.85f
+        });
+        m_runtimeUI.createWidget({
+            .type = UIWidgetType::Button, .name = "InteractPrompt",
+            .text = "[E] INTERACT  |  WASD MOVE  |  ESC EXIT",
+            .localRect = {18.0f, -50.0f, 520.0f, 32.0f},
+            .anchorX = 0.0f, .anchorY = 1.0f,
+            .color = {0.08f, 0.12f, 0.18f, 0.80f},
+            .focusable = true
+        });
+    }
 }
 
 Renderer::~Renderer() {
@@ -236,6 +281,7 @@ Renderer::~Renderer() {
         m_hizBuffers[i].reset();
         m_hizValid[i] = false;
     }
+    m_uiRenderer.shutdown();
     destroySceneMeshes();
     destroyGpuResources();
     destroyShadowPipeline();
@@ -2991,6 +3037,13 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 ++m_mainApiDrawCalls;
             }
         }
+    }
+
+    // 3b. Render Vulkan 2D Runtime UI HUD (zero Editor/ImGui dependency)
+    if (m_hudVisible && m_uiRenderer.isInitialized()) {
+        const VkExtent2D uiExt = m_swapchain->getExtent();
+        m_runtimeUI.computeLayout(static_cast<float>(uiExt.width), static_cast<float>(uiExt.height), 1.0f);
+        m_uiRenderer.render(cmd, uiExt, m_runtimeUI.buildDrawList());
     }
 
     vkCmdEndRendering(cmd);

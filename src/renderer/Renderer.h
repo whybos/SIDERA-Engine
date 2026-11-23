@@ -44,6 +44,8 @@
 #include "renderer/reflection/ReflectionPipeline.h"
 #include "profiling/GPUProfiler.h"
 #include "memory/MemoryBudgetManager.h"
+#include "renderer/UIRenderer.h"
+#include "runtime/RuntimeUI.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -529,6 +531,9 @@ private:
     std::unique_ptr<GPUProfiler> m_gpuProfiler;
     CPUProfiler m_cpuProfiler;
     std::unique_ptr<MemoryBudgetManager> m_memoryManager;
+    UIRenderer m_uiRenderer;
+    sidera::runtime::UISystem m_runtimeUI;
+    bool m_hudVisible = true;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
