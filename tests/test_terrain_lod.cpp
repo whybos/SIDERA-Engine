@@ -71,9 +71,11 @@ int main() {
         check(maxObservedDepth <= lodCfg.maxDepth, "Depth must never exceed maxDepth");
         check(maxObservedDepth >= 3, "Close camera should reach high detail depth");
 
-        // Far camera -> merges back down
+        // Far camera -> smoothly merges back down over morphDuration
         cam.setPosition(glm::vec3(0.0f, 2500.0f, 0.0f));
-        qt.update(0.016f, cam, 1080, false);
+        for (int f = 0; f < 40; ++f) {
+            qt.update(0.05f, cam, 1080, false);
+        }
         const auto selFar = qt.buildSelection(lodCfg.patchResolution);
         check(selFar.allLeafPatches.size() < selNear.allLeafPatches.size(), "Far camera must merge patches");
         std::cout << "  -> PASSED: Near leaves=" << selNear.allLeafPatches.size()
@@ -159,7 +161,7 @@ int main() {
                     check(v.color.z == 0.0f, "Even vertex must have morphMask == 0");
                     check(std::abs(v.color.x - v.position.y) < 1e-5f, "Even vertex parentY must equal worldY");
                 } else {
-                    check(v.color.z == 1.0f, "Odd vertex must have morphMask == 1");
+                    check(v.color.z >= 1.0f && v.color.z <= 5.0f, "Odd vertex must encode valid edgeRole (1..5)");
                     // Morph endpoint 0.0 -> child position; endpoint 1.0 -> exact parentY
                     const float y0 = v.position.y;
                     const float y1 = v.color.x;
@@ -172,16 +174,20 @@ int main() {
         // Verify smooth morph progression over time in quadtree
         TerrainLODConfig cfg = TerrainLODConfig::fromPreset(TerrainQualityPreset::High);
         cfg.geomorphingEnabled = true;
-        cfg.morphDuration = 0.2f;
+        cfg.morphDuration = 0.35f;
         TerrainQuadtree qt;
         qt.init(tCfg, cfg, heightmap);
         Camera cam;
         cam.setPosition(glm::vec3(0.0f, 15.0f, 0.0f));
-        qt.update(0.05f, cam, 1080, false); // morph advances from 1.0 -> 0.75
+        for (int f = 0; f < 4; ++f) {
+            qt.update(0.04f, cam, 1080, false); // 0.16s elapsed (< 0.35s)
+        }
         const float morphMid = qt.getStats().averageMorphFactor;
-        qt.update(0.30f, cam, 1080, false); // morph completes -> 0.0
+        for (int f = 0; f < 10; ++f) {
+            qt.update(0.04f, cam, 1080, false); // finishes > 0.35s
+        }
         const float morphEnd = qt.getStats().averageMorphFactor;
-        check(morphMid > 0.0f && morphMid < 1.0f, "Geomorphing must be strictly in (0, 1) mid-transition");
+        check(morphMid > 0.05f && morphMid < 0.95f, "Geomorphing must be strictly in (0.05, 0.95) mid-transition");
         check(morphEnd <= 0.001f, "Geomorphing must reach 0.0 after morphDuration");
         std::cout << "  -> PASSED: Geomorph endpoints and smooth transition (" << morphMid << " -> " << morphEnd << ") verified.\n";
     }
@@ -360,8 +366,76 @@ int main() {
                   << " ms (" << (totalMs / 60.0) << " ms/frame).\n";
     }
 
+    // -------------------------------------------------------------------------
+    // Test 10 (M23.1): Frame-rate-independent temporal morph, smooth merge, reversal & edge sync
+    // -------------------------------------------------------------------------
+    std::cout << "[Test 10] Frame-rate independence, smooth merge, transition reversal, and edge morph sync...\n";
+    {
+        auto runAtFps = [&](int fps) -> float {
+            TerrainLODConfig cfg = TerrainLODConfig::fromPreset(TerrainQualityPreset::High);
+            cfg.morphDuration = 0.35f;
+            TerrainQuadtree qt;
+            qt.init(tCfg, cfg, heightmap);
+            Camera cam;
+            cam.setPosition(glm::vec3(0.0f, 15.0f, 0.0f));
+            const float dt = 1.0f / static_cast<float>(fps);
+            const int frames = fps / 5; // 0.20 seconds elapsed
+            for (int i = 0; i < frames; ++i) {
+                qt.update(dt, cam, 1080, false);
+            }
+            return qt.getStats().averageMorphFactor;
+        };
+
+        const float m30  = runAtFps(30);
+        const float m60  = runAtFps(60);
+        const float m144 = runAtFps(144);
+        check(std::abs(m30 - m60) < 0.05f && std::abs(m60 - m144) < 0.05f,
+              "Temporal geomorphing must be frame-rate independent across 30/60/144 FPS");
+
+        // Verify smooth merge (does NOT snap on frame 1) & mid-merge direction reversal
+        TerrainLODConfig cfg = TerrainLODConfig::fromPreset(TerrainQualityPreset::High);
+        cfg.morphDuration = 0.35f;
+        TerrainQuadtree qt;
+        qt.init(tCfg, cfg, heightmap);
+        Camera cam;
+        cam.setPosition(glm::vec3(0.0f, 15.0f, 0.0f));
+        for (int i = 0; i < 15; ++i) qt.update(0.03f, cam, 1080, false); // settle fine
+        const uint32_t fineLeaves = qt.getStats().activeLeafNodes;
+
+        // Move far away -> starts Merging, should NOT collapse on frame 1!
+        cam.setPosition(glm::vec3(0.0f, 2500.0f, 0.0f));
+        qt.update(0.03f, cam, 1080, false);
+        check(qt.getStats().activeLeafNodes == fineLeaves, "Merge must morph smoothly before collapsing children");
+
+        // Advance partway through merge, then reverse camera back close!
+        qt.update(0.05f, cam, 1080, false);
+        const float morphDuringMerge = qt.getStats().averageMorphFactor;
+        check(morphDuringMerge > 0.0f && morphDuringMerge < 1.0f, "Merging patches must have intermediate morphFactor");
+
+        cam.setPosition(glm::vec3(0.0f, 15.0f, 0.0f));
+        qt.update(0.016f, cam, 1080, false);
+        check(qt.getStats().activeLeafNodes == fineLeaves, "Reversing mid-merge must keep children intact");
+
+        // Verify symmetric edgeMorph synchronization across all same-depth neighbors
+        const auto sel = qt.buildSelection(cfg.patchResolution);
+        for (const auto& a : sel.allLeafPatches) {
+            for (const auto& b : sel.allLeafPatches) {
+                if (a.depth == b.depth && a.gridZ == b.gridZ && a.gridX + 1u == b.gridX) {
+                    check(std::abs(a.edgeMorph.w - b.edgeMorph.z) < 1e-5f,
+                          "Adjacent East-West same-depth patches must have identical edgeMorph");
+                }
+                if (a.depth == b.depth && a.gridX == b.gridX && a.gridZ + 1u == b.gridZ) {
+                    check(std::abs(a.edgeMorph.y - b.edgeMorph.x) < 1e-5f,
+                          "Adjacent South-North same-depth patches must have identical edgeMorph");
+                }
+            }
+        }
+        std::cout << "  -> PASSED: 30/60/144 FPS (" << m30 << "/" << m60 << "/" << m144
+                  << "), smooth merge, reversal, and symmetric edgeMorph verified.\n";
+    }
+
     std::cout << "=================================================================\n";
-    std::cout << "ALL 9 ADVANCED TERRAIN LOD UNIT TESTS PASSED SUCCESSFULLY!\n";
+    std::cout << "ALL 10 ADVANCED TERRAIN LOD UNIT TESTS PASSED SUCCESSFULLY!\n";
     std::cout << "=================================================================\n";
     return 0;
 }

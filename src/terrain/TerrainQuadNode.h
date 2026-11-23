@@ -3,6 +3,8 @@
 #include "renderer/BoundingVolume.h"
 #include "terrain/TerrainNeighborData.h"
 
+#include <glm/vec4.hpp>
+
 #include <array>
 #include <cstdint>
 
@@ -10,9 +12,12 @@ namespace sidera {
 
 enum class TerrainPatchState : uint8_t {
     Inactive = 0,
-    Active,
-    MorphingIn,   // Newly subdivided child morphing from parent surface (1 -> 0)
-    MorphingOut   // Preparing to merge back to parent (0 -> 1)
+    Stable,
+    PreparingSplit,
+    Splitting,     // Newly subdivided child group morphing from parent surface (1 -> 0)
+    StableFine,    // Fully morphed to fine detail (morphFactor == 0)
+    PreparingMerge,
+    Merging        // Child group morphing back toward parent surface (0 -> 1) before collapse
 };
 
 // Deterministic 64-bit node key encoding (depth, gridX, gridZ)
@@ -49,9 +54,15 @@ struct TerrainQuadNode {
     // Last evaluated screen-space error in pixels
     float screenSpaceError = 0.0f;
 
-    // Geomorphing state: 0.0 = full child detail, 1.0 = morphed to parent surface
+    // Temporal geomorphing state: 0.0 = full child detail, 1.0 = morphed to parent surface
     float morphFactor = 0.0f;
     float targetMorphFactor = 0.0f;
+    float transitionProgress = 1.0f;  // linear [0..1] progress along current transition
+    float transitionElapsed = 0.0f;
+    float transitionDuration = 0.35f;
+
+    // Synchronized per-edge morph factors (x=North, y=South, z=West, w=East)
+    glm::vec4 edgeMorph{0.0f, 0.0f, 0.0f, 0.0f};
 
     TerrainNeighborData neighbors{};
     bool isVisible = true;

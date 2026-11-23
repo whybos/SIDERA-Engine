@@ -135,7 +135,7 @@ void TerrainRenderer::createPipelines(VkFormat colorFormat, VkFormat depthFormat
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
-    pcRange.size = 112; // sizeof(TerrainLODPushConstants)
+    pcRange.size = 128; // sizeof(TerrainLODPushConstants)
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

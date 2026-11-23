@@ -11,14 +11,15 @@ namespace sidera {
 
 namespace {
 
-// 112-byte push constants matching shaders/terrain.vert and shaders/terrain.frag
+// 128-byte push constants matching shaders/terrain.vert and shaders/terrain.frag
 struct TerrainLODPushConstants {
     glm::mat4 model{1.0f};
     glm::vec4 terrainParams{120.0f, 120.0f, 14.0f, 24.0f}; // x = width, y = length, z = heightScale, w = textureTiling
     glm::vec4 viewportParams{0.0f, 0.0f, 0.1f, 100.0f};     // x = mode, y = normalSpace, z = near, w = far
     glm::vec4 lodParams{0.0f, 0.0f, 0.0f, 0.0f};            // x = morphFactor, y = lodLevel, z = debugOverlayMode, w = stitchMask
+    glm::vec4 edgeMorph{0.0f, 0.0f, 0.0f, 0.0f};            // x = northMorph, y = southMorph, z = westMorph, w = eastMorph
 };
-static_assert(sizeof(TerrainLODPushConstants) == 112, "TerrainLODPushConstants must be 112 bytes.");
+static_assert(sizeof(TerrainLODPushConstants) == 128, "TerrainLODPushConstants must be 128 bytes.");
 
 constexpr uint64_t kDeferredDeleteFrames = 3ULL;
 constexpr uint64_t kCacheEvictAgeFrames  = 180ULL;
@@ -236,7 +237,8 @@ uint32_t TerrainLODManager::renderViewport(VkCommandBuffer cmd,
                 static_cast<float>(entry.lodLevel),
                 static_cast<float>(m_lodConfig.debugOverlayMode),
                 static_cast<float>(entry.stitchMask)
-            )
+            ),
+            .edgeMorph = m_lodConfig.geomorphingEnabled ? entry.edgeMorph : glm::vec4(0.0f)
         };
 
         vkCmdPushConstants(

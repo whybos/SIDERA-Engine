@@ -70,9 +70,13 @@ uint32_t TerrainQuadtree::allocateNode(uint32_t parentIndex, uint32_t depth, uin
     node.lodLevel = (m_lodConfig.maxDepth >= depth) ? (m_lodConfig.maxDepth - depth) : 0u;
     node.isLeaf = true;
     node.isVisible = true;
-    node.patchState = TerrainPatchState::Active;
+    node.patchState = TerrainPatchState::Stable;
     node.morphFactor = 0.0f;
     node.targetMorphFactor = 0.0f;
+    node.transitionProgress = 1.0f;
+    node.transitionElapsed = 0.0f;
+    node.transitionDuration = m_lodConfig.morphDuration;
+    node.edgeMorph = glm::vec4(0.0f);
 
     const float invDim = 1.0f / static_cast<float>(1u << depth);
     node.uMin = static_cast<float>(gridX) * invDim;
@@ -203,7 +207,10 @@ void TerrainQuadtree::subdivideNode(uint32_t nodeIndex, bool startMorphed) {
     for (uint32_t ci : m_nodes[nodeIndex].childIndices) {
         m_nodes[ci].morphFactor = initMorph;
         m_nodes[ci].targetMorphFactor = 0.0f;
-        m_nodes[ci].patchState = (initMorph > 0.0f) ? TerrainPatchState::MorphingIn : TerrainPatchState::Active;
+        m_nodes[ci].transitionProgress = (initMorph > 0.0f) ? 0.0f : 1.0f;
+        m_nodes[ci].transitionElapsed = 0.0f;
+        m_nodes[ci].transitionDuration = m_lodConfig.morphDuration;
+        m_nodes[ci].patchState = (initMorph > 0.0f) ? TerrainPatchState::Splitting : TerrainPatchState::StableFine;
     }
 
     ++m_stats.lodTransitionCount;
@@ -235,9 +242,11 @@ void TerrainQuadtree::mergeNode(uint32_t nodeIndex) {
         TerrainQuadNode::kInvalidIndex
     };
     m_nodes[nodeIndex].isLeaf = true;
-    m_nodes[nodeIndex].patchState = TerrainPatchState::Active;
+    m_nodes[nodeIndex].patchState = TerrainPatchState::Stable;
     m_nodes[nodeIndex].morphFactor = 0.0f;
     m_nodes[nodeIndex].targetMorphFactor = 0.0f;
+    m_nodes[nodeIndex].transitionProgress = 1.0f;
+    m_nodes[nodeIndex].transitionElapsed = 0.0f;
     ++m_stats.lodTransitionCount;
 }
 
@@ -269,12 +278,48 @@ void TerrainQuadtree::evaluateRecursive(uint32_t nodeIndex,
         if (m_nodes[nodeIndex].hasChildren()) {
             const auto children = m_nodes[nodeIndex].childIndices;
             for (uint32_t ci : children) {
+                // Reverse any in-progress merge smoothly from current morphFactor without popping
+                if (m_nodes[ci].patchState == TerrainPatchState::Merging) {
+                    m_nodes[ci].patchState = TerrainPatchState::Splitting;
+                    m_nodes[ci].targetMorphFactor = 0.0f;
+                    m_nodes[ci].transitionProgress = 1.0f - m_nodes[ci].morphFactor;
+                    m_nodes[ci].transitionElapsed = m_nodes[ci].transitionProgress * m_lodConfig.morphDuration;
+                }
                 evaluateRecursive(ci, cameraPos, fovDegrees, viewportHeight, errorBiasMultiplier, activeLeafBudget);
             }
         }
     } else if (currentlySplit) {
-        mergeNode(nodeIndex);
-        activeLeafBudget += 3u;
+        const auto children = m_nodes[nodeIndex].childIndices;
+        bool allChildrenAreLeaves = true;
+        bool allChildrenFinishedMerge = true;
+        for (uint32_t ci : children) {
+            if (m_nodes[ci].hasChildren()) {
+                allChildrenAreLeaves = false;
+                // Recursively collapse grandchildren first
+                evaluateRecursive(ci, cameraPos, fovDegrees, viewportHeight, errorBiasMultiplier, activeLeafBudget);
+            }
+            if (m_nodes[ci].hasChildren() || m_nodes[ci].morphFactor < 0.999f) {
+                allChildrenFinishedMerge = false;
+            }
+        }
+
+        if (allChildrenAreLeaves) {
+            if (!m_lodConfig.geomorphingEnabled || m_lodConfig.morphDuration <= 0.0001f || allChildrenFinishedMerge) {
+                mergeNode(nodeIndex);
+                activeLeafBudget += 3u;
+            } else {
+                // Begin or continue coordinated smooth merge transition (0 -> 1) for all 4 children
+                for (uint32_t ci : children) {
+                    if (m_nodes[ci].patchState != TerrainPatchState::Merging) {
+                        m_nodes[ci].patchState = TerrainPatchState::Merging;
+                        m_nodes[ci].targetMorphFactor = 1.0f;
+                        m_nodes[ci].transitionProgress = m_nodes[ci].morphFactor;
+                        m_nodes[ci].transitionElapsed = m_nodes[ci].transitionProgress * m_lodConfig.morphDuration;
+                        m_nodes[ci].transitionDuration = m_lodConfig.morphDuration;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -357,7 +402,7 @@ void TerrainQuadtree::balanceQuadtree() {
 
         for (uint32_t idx : toSubdivide) {
             if (m_nodes[idx].isLeaf) {
-                subdivideNode(idx, false);
+                subdivideNode(idx, true);
                 changed = true;
             }
         }
@@ -379,21 +424,29 @@ void TerrainQuadtree::updateNeighborsAndStitchMasks() {
         const int32_t gx = static_cast<int32_t>(n.gridX);
         const int32_t gz = static_cast<int32_t>(n.gridZ);
 
-        auto queryDir = [&](int32_t dx, int32_t dz, uint64_t& outId, int32_t& outDepth, uint8_t edgeBit) {
+        auto queryDir = [&](int32_t dx, int32_t dz, uint64_t& outId, int32_t& outDepth, uint8_t edgeBit, float& outEdgeMorph) {
             const uint32_t nIdx = findLeafAt(n.depth, gx + dx, gz + dz);
             if (nIdx != TerrainQuadNode::kInvalidIndex) {
                 outId = m_nodes[nIdx].nodeId;
                 outDepth = static_cast<int32_t>(m_nodes[nIdx].depth);
                 if (m_lodConfig.stitchingEnabled && m_nodes[nIdx].depth < n.depth) {
                     n.neighbors.stitchMask |= edgeBit;
+                    outEdgeMorph = 0.0f; // Odd vertices on coarser edge are omitted by stitch index buffer
+                } else if (m_nodes[nIdx].depth == n.depth && m_nodes[nIdx].isLeaf) {
+                    // Synchronize shared boundary morph factor symmetrically across both neighbors
+                    outEdgeMorph = 0.5f * (n.morphFactor + m_nodes[nIdx].morphFactor);
+                } else {
+                    outEdgeMorph = n.morphFactor;
                 }
+            } else {
+                outEdgeMorph = n.morphFactor;
             }
         };
 
-        queryDir(0, -1, n.neighbors.northNodeId, n.neighbors.northDepth, kEdgeNorth);
-        queryDir(0,  1, n.neighbors.southNodeId, n.neighbors.southDepth, kEdgeSouth);
-        queryDir(-1, 0, n.neighbors.westNodeId,  n.neighbors.westDepth,  kEdgeWest);
-        queryDir( 1, 0, n.neighbors.eastNodeId,  n.neighbors.eastDepth,  kEdgeEast);
+        queryDir(0, -1, n.neighbors.northNodeId, n.neighbors.northDepth, kEdgeNorth, n.edgeMorph.x);
+        queryDir(0,  1, n.neighbors.southNodeId, n.neighbors.southDepth, kEdgeSouth, n.edgeMorph.y);
+        queryDir(-1, 0, n.neighbors.westNodeId,  n.neighbors.westDepth,  kEdgeWest,  n.edgeMorph.z);
+        queryDir( 1, 0, n.neighbors.eastNodeId,  n.neighbors.eastDepth,  kEdgeEast,  n.edgeMorph.w);
     }
 }
 
@@ -401,22 +454,36 @@ void TerrainQuadtree::updateGeomorphing(float deltaTime) {
     if (!m_lodConfig.geomorphingEnabled || m_lodConfig.morphDuration <= 0.0001f) {
         for (uint32_t idx : m_activeLeaves) {
             m_nodes[idx].morphFactor = 0.0f;
-            m_nodes[idx].patchState = TerrainPatchState::Active;
+            m_nodes[idx].transitionProgress = 1.0f;
+            m_nodes[idx].patchState = TerrainPatchState::StableFine;
         }
         return;
     }
 
-    const float step = std::clamp(deltaTime / m_lodConfig.morphDuration, 0.0f, 1.0f);
+    // Clamp large frame hitches for frame-rate-independent smooth transitions
+    const float safeDt = std::clamp(deltaTime, 0.0f, m_lodConfig.maxDeltaTimeClamp);
+    const float duration = std::max(m_lodConfig.morphDuration, 0.05f);
+    const auto smoothstep = [](float t) noexcept -> float {
+        const float c = std::clamp(t, 0.0f, 1.0f);
+        return c * c * (3.0f - 2.0f * c);
+    };
+
     for (uint32_t idx : m_activeLeaves) {
         TerrainQuadNode& n = m_nodes[idx];
-        if (n.morphFactor > n.targetMorphFactor) {
-            n.morphFactor = std::max(n.targetMorphFactor, n.morphFactor - step);
-            if (n.morphFactor <= 0.0001f) {
+        if (n.patchState == TerrainPatchState::Splitting) {
+            n.transitionElapsed += safeDt;
+            n.transitionProgress = std::clamp(n.transitionElapsed / duration, 0.0f, 1.0f);
+            const float eased = m_lodConfig.useSmoothstepEasing ? smoothstep(n.transitionProgress) : n.transitionProgress;
+            n.morphFactor = 1.0f - eased;
+            if (n.transitionProgress >= 1.0f) {
                 n.morphFactor = 0.0f;
-                n.patchState = TerrainPatchState::Active;
+                n.patchState = TerrainPatchState::StableFine;
             }
-        } else if (n.morphFactor < n.targetMorphFactor) {
-            n.morphFactor = std::min(n.targetMorphFactor, n.morphFactor + step);
+        } else if (n.patchState == TerrainPatchState::Merging) {
+            n.transitionElapsed += safeDt;
+            n.transitionProgress = std::clamp(n.transitionElapsed / duration, 0.0f, 1.0f);
+            const float eased = m_lodConfig.useSmoothstepEasing ? smoothstep(n.transitionProgress) : n.transitionProgress;
+            n.morphFactor = eased;
         }
     }
 }
@@ -477,8 +544,15 @@ void TerrainQuadtree::update(float deltaTime,
     uint32_t leafBudget = m_lodConfig.maxActivePatches > 1u ? (m_lodConfig.maxActivePatches - 1u) : 1u;
     evaluateRecursive(0u, camera.getPosition(), camera.getFovDegrees(), viewportHeight, errorBiasMultiplier, leafBudget);
     balanceQuadtree();
-    updateNeighborsAndStitchMasks();
+    // Refresh active leaves, advance temporal geomorphing, then synchronize neighbor edge morphs!
+    m_activeLeaves.clear();
+    for (size_t i = 0; i < m_nodes.size(); ++i) {
+        if (m_nodes[i].isLeaf) {
+            m_activeLeaves.push_back(static_cast<uint32_t>(i));
+        }
+    }
     updateGeomorphing(deltaTime);
+    updateNeighborsAndStitchMasks();
 
     const glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
     const Frustum frustum = Frustum::fromViewProj(vp);
@@ -517,6 +591,8 @@ TerrainLODSelection TerrainQuadtree::buildSelection(uint32_t patchResolution) co
         entry.geometricError = n.geometricError;
         entry.screenSpaceError = n.screenSpaceError;
         entry.morphFactor = n.morphFactor;
+        entry.edgeMorph = n.edgeMorph;
+        entry.patchState = n.patchState;
         entry.stitchMask = n.neighbors.stitchMask;
         entry.isVisible = n.isVisible;
 

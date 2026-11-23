@@ -33,6 +33,8 @@ struct TerrainPatchSelectionEntry {
     float geometricError = 0.0f;
     float screenSpaceError = 0.0f;
     float morphFactor = 0.0f;
+    glm::vec4 edgeMorph{0.0f, 0.0f, 0.0f, 0.0f};
+    TerrainPatchState patchState = TerrainPatchState::Stable;
     uint8_t stitchMask = kEdgeNone;
     bool isVisible = true;
 };

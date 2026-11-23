@@ -21,6 +21,7 @@ layout(push_constant) uniform PushConstants {
     vec4 terrainParams;    // x = width, y = length, z = heightScale, w = textureTiling
     vec4 viewportParams;   // x = viewportMode, y = normalSpace (0=world, 1=view), z = nearPlane, w = farPlane
     vec4 lodParams;        // x = morphFactor, y = lodLevel, z = debugOverlayMode, w = stitchMask
+    vec4 edgeMorph;        // x = northMorph, y = southMorph, z = westMorph, w = eastMorph
 } pc;
 
 // Universal Scene Environment & Shadow Bindings (Set 0)

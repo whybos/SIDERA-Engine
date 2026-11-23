@@ -56,9 +56,13 @@ struct TerrainLODConfig {
     // Distance-based fallback multiplier (split when dist < patchSize * distanceSplitFactor)
     float distanceSplitFactor = 2.2f;
 
-    // Geomorphing transition parameters
+    // Geomorphing transition parameters (Milestone 23.1 Temporal Geomorphing)
     bool geomorphingEnabled = true;
-    float morphDuration = 0.25f; // seconds for smooth 0..1 transition
+    float minMorphDuration = 0.20f;   // minimum allowed transition duration (seconds)
+    float morphDuration = 0.35f;      // default smooth transition duration (seconds)
+    float maxMorphDuration = 0.60f;   // maximum allowed transition duration (seconds)
+    float maxDeltaTimeClamp = 0.05f;  // clamp frame hitches so transitions never snap
+    bool useSmoothstepEasing = true;  // smoothstep(t) = t*t*(3 - 2*t) easing curve
 
     // Neighbor balancing & stitching
     bool balanceQuadtree = true;
@@ -139,8 +143,19 @@ struct TerrainLODConfig {
         } else if (lodHysteresis > 0.98f) {
             lodHysteresis = 0.98f;
         }
-        if (morphDuration < 0.0f) {
-            morphDuration = 0.0f;
+        if (minMorphDuration < 0.05f) {
+            minMorphDuration = 0.05f;
+        }
+        if (maxMorphDuration < minMorphDuration) {
+            maxMorphDuration = minMorphDuration;
+        }
+        if (morphDuration < minMorphDuration) {
+            morphDuration = minMorphDuration;
+        } else if (morphDuration > maxMorphDuration) {
+            morphDuration = maxMorphDuration;
+        }
+        if (maxDeltaTimeClamp < 0.005f) {
+            maxDeltaTimeClamp = 0.005f;
         }
         if (shadowLodBias < 0.5f) {
             shadowLodBias = 0.5f;

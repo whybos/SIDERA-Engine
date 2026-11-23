@@ -18,8 +18,9 @@ struct TerrainPushConstants {
     glm::vec4 terrainParams{120.0f, 120.0f, 14.0f, 24.0f}; // x = width, y = length, z = heightScale, w = textureTiling
     glm::vec4 viewportParams{0.0f, 0.0f, 0.1f, 100.0f};     // x = mode, y = normalSpace, z = near, w = far
     glm::vec4 lodParams{0.0f, 0.0f, 0.0f, 0.0f};            // x = morphFactor, y = lodLevel, z = debugOverlay, w = stitchMask
+    glm::vec4 edgeMorph{0.0f, 0.0f, 0.0f, 0.0f};            // x = north, y = south, z = west, w = east
 };
-static_assert(sizeof(TerrainPushConstants) == 112, "TerrainPushConstants must be 112 bytes.");
+static_assert(sizeof(TerrainPushConstants) == 128, "TerrainPushConstants must be 128 bytes.");
 
 } // namespace
 

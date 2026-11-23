@@ -21,10 +21,11 @@ layout(push_constant) uniform PushConstants {
     vec4 terrainParams;    // x = width, y = length, z = heightScale, w = textureTiling
     vec4 viewportParams;   // x = viewportMode, y = normalSpace, z = nearPlane, w = farPlane
     vec4 lodParams;        // x = morphFactor, y = lodLevel, z = debugOverlayMode, w = stitchMask
+    vec4 edgeMorph;        // x = northMorph, y = southMorph, z = westMorph, w = eastMorph
 } pc;
 
 layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inColor;   // x = parentWorldY (geomorphing), y = lodLevel, z = morphMask
+layout(location = 1) in vec3 inColor;   // x = parentWorldY, y = lodLevel, z = edgeRole (0=even,1=int,2=N,3=S,4=W,5=E)
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec3 inNormal;
 
@@ -35,10 +36,20 @@ layout(location = 3) out vec2 fragUV;
 layout(location = 4) out vec2 fragTerrainUV;
 
 void main() {
-    // GPU Geomorphing: smoothly interpolate odd vertices toward parent surface height
-    float morphFactor = clamp(pc.lodParams.x, 0.0, 1.0);
+    // Neighbor-synchronized GPU Geomorphing (Milestone 23.1)
+    float role = inColor.z;
+    float m = 0.0;
+    if (role > 0.5) {
+        if (role < 1.5)      m = pc.lodParams.x; // interior odd
+        else if (role < 2.5) m = pc.edgeMorph.x; // North edge odd
+        else if (role < 3.5) m = pc.edgeMorph.y; // South edge odd
+        else if (role < 4.5) m = pc.edgeMorph.z; // West edge odd
+        else                 m = pc.edgeMorph.w; // East edge odd
+    }
+    m = clamp(m, 0.0, 1.0);
+
     vec3 morphedPos = inPosition;
-    morphedPos.y = mix(inPosition.y, inColor.x, morphFactor * inColor.z);
+    morphedPos.y = mix(inPosition.y, inColor.x, m);
 
     vec4 world = pc.model * vec4(morphedPos, 1.0);
     fragWorldPos = world.xyz;

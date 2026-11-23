@@ -289,6 +289,16 @@ void TerrainPatchMesh::generate(uint32_t patchResolution,
                 morphMask = 1.0f;
             }
 
+            // Encode vertex role in color.z for neighbor-synchronized GPU geomorphing:
+            // 0 = even (no morph), 1 = interior odd, 2 = North odd, 3 = South odd, 4 = West odd, 5 = East odd
+            if (morphMask > 0.5f) {
+                if (iz == 0u)      morphMask = 2.0f; // North edge odd
+                else if (iz == R)  morphMask = 3.0f; // South edge odd
+                else if (ix == 0u) morphMask = 4.0f; // West edge odd
+                else if (ix == R)  morphMask = 5.0f; // East edge odd
+                else               morphMask = 1.0f; // Interior odd
+            }
+
             vert.color.x = parentY;
             vert.color.y = static_cast<float>(lodLevel);
             vert.color.z = morphMask;
