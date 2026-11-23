@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.34.0
+    VERSION 0.35.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -368,6 +368,10 @@ set(SIDERA_SOURCES
     src/memory/MemoryTypes.h
     src/memory/MemoryBudgetManager.h
     src/memory/MemoryBudgetManager.cpp
+    src/assets/AssetTypes.h
+    src/assets/AssetImporter.h
+    src/assets/AssetDatabase.h
+    src/assets/AssetDatabase.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -835,6 +839,10 @@ add_executable(test_world_partition
     src/memory/MemoryTypes.h
     src/memory/MemoryBudgetManager.h
     src/memory/MemoryBudgetManager.cpp
+    src/assets/AssetTypes.h
+    src/assets/AssetImporter.h
+    src/assets/AssetDatabase.h
+    src/assets/AssetDatabase.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1518,3 +1526,24 @@ target_link_libraries(test_memory_streaming
         glfw
         glm::glm
 )
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_asset_pipeline (Milestone 35)
+# -----------------------------------------------------------------------------
+add_executable(test_asset_pipeline
+    tests/test_asset_pipeline.cpp
+    src/assets/AssetDatabase.cpp
+)
+
+target_include_directories(test_asset_pipeline
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(MSVC)
+    target_compile_options(test_asset_pipeline PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_asset_pipeline PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_asset_pipeline PRIVATE -Wall -Wextra -Wpedantic)
+endif()
