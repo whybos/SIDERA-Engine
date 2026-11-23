@@ -43,6 +43,7 @@
 #include "renderer/gi/GlobalIlluminationPipeline.h"
 #include "renderer/reflection/ReflectionPipeline.h"
 #include "profiling/GPUProfiler.h"
+#include "memory/MemoryBudgetManager.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -335,6 +336,10 @@ public:
     [[nodiscard]] const GPUProfiler* getGPUProfiler() const noexcept { return m_gpuProfiler.get(); }
     [[nodiscard]] CPUProfiler& getCPUProfiler() noexcept { return m_cpuProfiler; }
     [[nodiscard]] const CPUProfiler& getCPUProfiler() const noexcept { return m_cpuProfiler; }
+
+    // Memory & Streaming Optimization (Milestone 34)
+    [[nodiscard]] MemoryBudgetManager* getMemoryBudgetManager() noexcept { return m_memoryManager.get(); }
+    [[nodiscard]] const MemoryBudgetManager* getMemoryBudgetManager() const noexcept { return m_memoryManager.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -523,6 +528,7 @@ private:
     std::unique_ptr<ReflectionPipeline> m_reflectionPipeline;
     std::unique_ptr<GPUProfiler> m_gpuProfiler;
     CPUProfiler m_cpuProfiler;
+    std::unique_ptr<MemoryBudgetManager> m_memoryManager;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

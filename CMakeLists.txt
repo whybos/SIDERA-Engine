@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.33.0
+    VERSION 0.34.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -365,6 +365,9 @@ set(SIDERA_SOURCES
     src/profiling/GPUProfileTypes.h
     src/profiling/GPUProfiler.h
     src/profiling/GPUProfiler.cpp
+    src/memory/MemoryTypes.h
+    src/memory/MemoryBudgetManager.h
+    src/memory/MemoryBudgetManager.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -829,6 +832,9 @@ add_executable(test_world_partition
     src/profiling/GPUProfileTypes.h
     src/profiling/GPUProfiler.h
     src/profiling/GPUProfiler.cpp
+    src/memory/MemoryTypes.h
+    src/memory/MemoryBudgetManager.h
+    src/memory/MemoryBudgetManager.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1469,6 +1475,44 @@ else()
 endif()
 
 target_link_libraries(test_gpu_profiling
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_memory_streaming (Milestone 34)
+# -----------------------------------------------------------------------------
+add_executable(test_memory_streaming
+    tests/test_memory_streaming.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/memory/MemoryBudgetManager.cpp
+)
+
+target_include_directories(test_memory_streaming
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_memory_streaming
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_memory_streaming PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_memory_streaming PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_memory_streaming PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_memory_streaming
     PRIVATE
         Vulkan::Vulkan
         glfw

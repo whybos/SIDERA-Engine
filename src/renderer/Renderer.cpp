@@ -1924,6 +1924,23 @@ void Renderer::createSceneMeshes() {
     if (m_reflectionPipeline) mem.addRecord({"SSRTargets", GPUMemorySubsystem::Reflections, m_reflectionPipeline->getStats().gpuMemoryBytes, 0, true});
 
     // -----------------------------------------------------------------
+    // MEMORY & STREAMING BUDGET MANAGER (Milestone 34)
+    // -----------------------------------------------------------------
+    m_memoryManager = std::make_unique<MemoryBudgetManager>();
+    m_memoryManager->init(&dev);
+    for (const auto& rec : mem.records) {
+        ResourceRegistryEntry entry{};
+        entry.name = rec.name;
+        entry.subsystem = rec.subsystem;
+        entry.lifetime = ResourceLifetimeClass::Persistent;
+        entry.residency = ResourceResidencyState::Resident;
+        entry.estimatedGpuBytes = rec.estimatedBytes;
+        entry.actualGpuBytes = rec.actualAllocatedBytes;
+        entry.pinned = true;
+        m_memoryManager->registerResource(entry);
+    }
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2453,6 +2470,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_memoryManager.reset();
     m_gpuProfiler.reset();
     m_reflectionPipeline.reset();
     m_giPipeline.reset();
@@ -3001,6 +3019,9 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         m_hizValid[m_currentFrame] = true;
     }
 
+    if (m_memoryManager) {
+        m_memoryManager->processDeferredDestructions(m_renderedFrames);
+    }
     if (m_gpuProfiler) {
         m_gpuProfiler->beginFrame(cmd, m_currentFrame, m_renderedFrames);
     }
