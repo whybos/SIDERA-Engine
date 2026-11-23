@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.37.0
+    VERSION 0.38.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -380,6 +380,9 @@ set(SIDERA_SOURCES
     src/physics/PhysicsTypes.h
     src/physics/PhysicsWorld.h
     src/physics/PhysicsWorld.cpp
+    src/audio/AudioTypes.h
+    src/audio/AudioSystem.h
+    src/audio/AudioSystem.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -859,6 +862,9 @@ add_executable(test_world_partition
     src/physics/PhysicsTypes.h
     src/physics/PhysicsWorld.h
     src/physics/PhysicsWorld.cpp
+    src/audio/AudioTypes.h
+    src/audio/AudioSystem.h
+    src/audio/AudioSystem.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1614,6 +1620,33 @@ else()
 endif()
 
 target_link_libraries(test_physics_integration
+    PRIVATE
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_audio_system (Milestone 38)
+# -----------------------------------------------------------------------------
+add_executable(test_audio_system
+    tests/test_audio_system.cpp
+    src/physics/PhysicsWorld.cpp
+    src/audio/AudioSystem.cpp
+)
+
+target_include_directories(test_audio_system
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(MSVC)
+    target_compile_options(test_audio_system PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_audio_system PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_audio_system PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_audio_system
     PRIVATE
         glm::glm
 )
