@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.27.0
+    VERSION 0.28.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -138,6 +138,9 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/terrain_shadow.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/veg_cull_compact.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vt_feedback_resolve.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/light_culling.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.frag
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -326,6 +329,12 @@ set(SIDERA_SOURCES
     src/virtualtexturing/VirtualTexturePhysicalCache.cpp
     src/virtualtexturing/VirtualTextureSystem.h
     src/virtualtexturing/VirtualTextureSystem.cpp
+    src/renderer/lighting/RenderPath.h
+    src/renderer/lighting/LightTypes.h
+    src/renderer/lighting/GBuffer.h
+    src/renderer/lighting/GBuffer.cpp
+    src/renderer/lighting/TiledLightCuller.h
+    src/renderer/lighting/TiledLightCuller.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -769,6 +778,12 @@ add_executable(test_world_partition
     src/virtualtexturing/VirtualTexturePhysicalCache.cpp
     src/virtualtexturing/VirtualTextureSystem.h
     src/virtualtexturing/VirtualTextureSystem.cpp
+    src/renderer/lighting/RenderPath.h
+    src/renderer/lighting/LightTypes.h
+    src/renderer/lighting/GBuffer.h
+    src/renderer/lighting/GBuffer.cpp
+    src/renderer/lighting/TiledLightCuller.h
+    src/renderer/lighting/TiledLightCuller.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1164,6 +1179,47 @@ else()
 endif()
 
 target_link_libraries(test_virtual_texturing
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# -----------------------------------------------------------------------------
+# Test Target: test_deferred_forward_plus (Milestone 28)
+# -----------------------------------------------------------------------------
+add_executable(test_deferred_forward_plus
+    tests/test_deferred_forward_plus.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanShader.cpp
+    src/renderer/lighting/GBuffer.cpp
+    src/renderer/lighting/TiledLightCuller.cpp
+)
+
+target_include_directories(test_deferred_forward_plus
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_deferred_forward_plus
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_deferred_forward_plus PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_deferred_forward_plus PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_deferred_forward_plus PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_deferred_forward_plus
     PRIVATE
         Vulkan::Vulkan
         glfw

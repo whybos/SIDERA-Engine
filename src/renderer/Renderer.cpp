@@ -1873,6 +1873,21 @@ void Renderer::createSceneMeshes() {
     m_virtualTextureSystem->createVirtualTexture("Terrain_Normal_VT", 16384, 16384, VirtualTextureSemantic::NormalLinear);
 
     // -----------------------------------------------------------------
+    // DEFERRED / FORWARD+ RENDERING & TILED LIGHT CULLING (Milestone 28)
+    // -----------------------------------------------------------------
+    m_lightManager.populateDemoLights(64u);
+    const VkExtent2D gbExt = m_swapchain->getExtent();
+    m_gbuffer = std::make_unique<GBuffer>();
+    m_gbuffer->init(dev, gbExt.width, gbExt.height);
+
+    m_tiledLightCuller = std::make_unique<TiledLightCuller>();
+    m_tiledLightCuller->init(gbExt.width, gbExt.height, &dev);
+    for (uint32_t f = 0; f < kMaxFramesInFlight; ++f) {
+        m_tiledLightCuller->uploadLights(f, m_lightManager);
+    }
+    m_lightManager.clearDirty();
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2402,6 +2417,8 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_tiledLightCuller.reset();
+    m_gbuffer.reset();
     m_virtualTextureSystem.reset();
     m_gpuVegetationSystem.reset();
     m_vegetationManager.reset();
@@ -2621,6 +2638,14 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     if (m_virtualTextureSystem && m_virtualTextureSystem->isGpuActive()) {
         m_virtualTextureSystem->beginFrame();
         m_virtualTextureSystem->recordFeedbackPass(cmd, m_currentFrame, m_camera, 120.0f);
+    }
+
+    // 1.7 GPU 16x16 Tiled Light Culling Pass for Deferred / Forward+ (Milestone 28)
+    if (m_renderPath != RenderPath::Forward && m_tiledLightCuller && m_tiledLightCuller->isGpuActive()) {
+        if (m_lightManager.isDirty()) {
+            m_tiledLightCuller->uploadLights(m_currentFrame, m_lightManager);
+        }
+        m_tiledLightCuller->recordCull(cmd, m_currentFrame, m_camera, m_lightManager.getLightCount());
     }
 
     // Timestamp 1: end of command generation

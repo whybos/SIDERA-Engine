@@ -189,11 +189,16 @@ int main(int argc, char* argv[]) {
             else if (wp == "desert") config.worldPreset = sidera::WorldPreset::DesertWorld;
             else if (wp == "alpine") config.worldPreset = sidera::WorldPreset::AlpineWorld;
             else config.worldPreset = sidera::WorldPreset::Balanced;
+        } else if (arg == "--render-path" && i + 1 < argc) {
+            const std::string_view rp(argv[++i]);
+            if (rp == "forward") config.renderPath = sidera::RenderPath::Forward;
+            else if (rp == "deferred") config.renderPath = sidera::RenderPath::Deferred;
+            else config.renderPath = sidera::RenderPath::ForwardPlus;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.27.0 (Milestone 27: Virtual Texturing System)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.28.0 (Milestone 28: Deferred / Forward+ Rendering)...");
         {
             sidera::Application app(config);
             app.run();

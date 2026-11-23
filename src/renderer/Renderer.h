@@ -34,6 +34,10 @@
 #include "vegetation/VegetationDistributionManager.h"
 #include "vegetation/GPUVegetationSystem.h"
 #include "virtualtexturing/VirtualTextureSystem.h"
+#include "renderer/lighting/RenderPath.h"
+#include "renderer/lighting/LightTypes.h"
+#include "renderer/lighting/GBuffer.h"
+#include "renderer/lighting/TiledLightCuller.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -294,6 +298,16 @@ public:
     // Virtual Texturing System (Milestone 27)
     [[nodiscard]] VirtualTextureSystem* getVirtualTextureSystem() noexcept { return m_virtualTextureSystem.get(); }
     [[nodiscard]] const VirtualTextureSystem* getVirtualTextureSystem() const noexcept { return m_virtualTextureSystem.get(); }
+
+    // Deferred / Forward+ Rendering (Milestone 28)
+    [[nodiscard]] RenderPath getRenderPath() const noexcept { return m_renderPath; }
+    void setRenderPath(RenderPath path) noexcept { m_renderPath = path; }
+    void cycleRenderPath() noexcept {
+        m_renderPath = static_cast<RenderPath>((static_cast<uint8_t>(m_renderPath) + 1u) % 3u);
+    }
+    [[nodiscard]] LightManager& getLightManager() noexcept { return m_lightManager; }
+    [[nodiscard]] const GBuffer* getGBuffer() const noexcept { return m_gbuffer.get(); }
+    [[nodiscard]] const TiledLightCuller* getTiledLightCuller() const noexcept { return m_tiledLightCuller.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -472,6 +486,10 @@ private:
     std::unique_ptr<VegetationDistributionManager> m_vegetationManager;
     std::unique_ptr<GPUVegetationSystem> m_gpuVegetationSystem;
     std::unique_ptr<VirtualTextureSystem> m_virtualTextureSystem;
+    RenderPath m_renderPath = RenderPath::ForwardPlus;
+    LightManager m_lightManager;
+    std::unique_ptr<GBuffer> m_gbuffer;
+    std::unique_ptr<TiledLightCuller> m_tiledLightCuller;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

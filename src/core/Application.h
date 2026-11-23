@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.27.0 - Virtual Texturing System",
+        .title = "SIDERA Engine v0.28.0 - Deferred / Forward+ Rendering",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -54,6 +54,7 @@ struct ApplicationConfig {
     bool showCascades = false;     // --show-cascades: cascade split color visualization
     bool showShadowMap = false;    // --show-shadow-map: shadow depth map debug visualization
     RenderMode renderMode = RenderMode::Gpu; // --renderer gpu|cpu (GPU-driven indirect by default)
+    RenderPath renderPath = RenderPath::ForwardPlus; // --render-path forward|deferred|forward-plus
     bool frustumCulling = true;    // --frustum-culling / --no-frustum-culling
     bool occlusionCulling = true;  // --occlusion-culling / --no-occlusion-culling
     bool showHiZ = false;          // --show-hiz: Hi-Z depth map debug visualization

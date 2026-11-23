@@ -1,0 +1,110 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+const uint MAX_LIGHTS_PER_TILE = 64u;
+
+struct GPULight {
+    vec4 positionRadius; // xyz = world pos, w = radius
+    vec4 directionType;  // xyz = dir, w = type (0=Dir, 1=Point, 2=Spot)
+    vec4 colorIntensity; // rgb = color, a = intensity
+    vec4 spotParams;     // x = cosInner, y = cosOuter, z = enabled, w = shadowIdx
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer LightBuffer {
+    GPULight lights[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer TileLightIndexBuffer {
+    uint tileLightIndices[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer TileLightCountBuffer {
+    uint tileLightCounts[];
+};
+
+layout(std430, set = 0, binding = 3) buffer OverflowBuffer {
+    uint overflowCount;
+    uint totalAssigned;
+    uint maxLightsInTile;
+    uint pad0;
+} stats;
+
+layout(push_constant) uniform LightCullPC {
+    mat4 view;
+    vec4 projParams;   // x = proj[0][0], y = proj[1][1], z = nearPlane, w = farPlane
+    uvec4 tileParams;  // x = screenWidth, y = screenHeight, z = tilesX, w = lightCount
+} pc;
+
+shared uint s_tileLightCount;
+shared uint s_tileLightIndices[MAX_LIGHTS_PER_TILE];
+
+void main() {
+    uint localIdx = gl_LocalInvocationIndex;
+    if (localIdx == 0u) {
+        s_tileLightCount = 0u;
+    }
+    barrier();
+
+    uvec2 tileId = gl_WorkGroupID.xy;
+    uint tilesX = max(1u, pc.tileParams.z);
+    uint tilesY = max(1u, (pc.tileParams.y + 15u) / 16u);
+    uint tileIndex = tileId.y * tilesX + tileId.x;
+
+    // Tile NDC bounds [-1, 1]
+    vec2 tileMinNDC = (vec2(tileId) * 16.0 / vec2(max(pc.tileParams.x, 1u), max(pc.tileParams.y, 1u))) * 2.0 - 1.0;
+    vec2 tileMaxNDC = (vec2(tileId + uvec2(1u)) * 16.0 / vec2(max(pc.tileParams.x, 1u), max(pc.tileParams.y, 1u))) * 2.0 - 1.0;
+
+    uint lightCount = pc.tileParams.w;
+    for (uint i = localIdx; i < lightCount; i += 256u) {
+        GPULight L = lights[i];
+        if (L.spotParams.z < 0.5) {
+            continue;
+        }
+        uint lType = uint(L.directionType.w + 0.5);
+        bool affectsTile = false;
+
+        if (lType == 0u) {
+            // Directional light affects all tiles
+            affectsTile = true;
+        } else {
+            // Transform sphere center to view space (camera looks down -Z)
+            vec3 viewPos = (pc.view * vec4(L.positionRadius.xyz, 1.0)).xyz;
+            float r = max(L.positionRadius.w, 0.1);
+            float depth = -viewPos.z;
+            if (depth + r >= pc.projParams.z && depth - r <= pc.projParams.w) {
+                float safeZ = max(depth, pc.projParams.z);
+                float ndcX = (viewPos.x * pc.projParams.x) / safeZ;
+                float ndcY = (viewPos.y * pc.projParams.y) / safeZ;
+                float radX = (r * abs(pc.projParams.x)) / safeZ;
+                float radY = (r * abs(pc.projParams.y)) / safeZ;
+                if (ndcX + radX >= tileMinNDC.x && ndcX - radX <= tileMaxNDC.x &&
+                    ndcY + radY >= tileMinNDC.y && ndcY - radY <= tileMaxNDC.y) {
+                    affectsTile = true;
+                }
+            }
+        }
+
+        if (affectsTile) {
+            uint slot = atomicAdd(s_tileLightCount, 1u);
+            if (slot < MAX_LIGHTS_PER_TILE) {
+                s_tileLightIndices[slot] = i;
+            } else {
+                atomicAdd(stats.overflowCount, 1u);
+            }
+        }
+    }
+    barrier();
+
+    uint finalCount = min(s_tileLightCount, MAX_LIGHTS_PER_TILE);
+    uint baseOffset = tileIndex * MAX_LIGHTS_PER_TILE;
+    for (uint i = localIdx; i < finalCount; i += 256u) {
+        tileLightIndices[baseOffset + i] = s_tileLightIndices[i];
+    }
+
+    if (localIdx == 0u && tileId.x < tilesX && tileId.y < tilesY) {
+        tileLightCounts[tileIndex] = finalCount;
+        atomicAdd(stats.totalAssigned, finalCount);
+        atomicMax(stats.maxLightsInTile, finalCount);
+    }
+}
