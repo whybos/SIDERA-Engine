@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.35.0
+    VERSION 0.36.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -372,6 +372,11 @@ set(SIDERA_SOURCES
     src/assets/AssetImporter.h
     src/assets/AssetDatabase.h
     src/assets/AssetDatabase.cpp
+    src/scene/SceneTypes.h
+    src/scene/Scene.h
+    src/scene/Scene.cpp
+    src/scene/SceneSerializer.h
+    src/scene/SceneSerializer.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -843,6 +848,11 @@ add_executable(test_world_partition
     src/assets/AssetImporter.h
     src/assets/AssetDatabase.h
     src/assets/AssetDatabase.cpp
+    src/scene/SceneTypes.h
+    src/scene/Scene.h
+    src/scene/Scene.cpp
+    src/scene/SceneSerializer.h
+    src/scene/SceneSerializer.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1547,3 +1557,31 @@ if(MSVC)
 else()
     target_compile_options(test_asset_pipeline PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_scene_serialization (Milestone 36)
+# -----------------------------------------------------------------------------
+add_executable(test_scene_serialization
+    tests/test_scene_serialization.cpp
+    src/assets/AssetDatabase.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneSerializer.cpp
+)
+
+target_include_directories(test_scene_serialization
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(MSVC)
+    target_compile_options(test_scene_serialization PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_scene_serialization PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_scene_serialization PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_scene_serialization
+    PRIVATE
+        glm::glm
+)

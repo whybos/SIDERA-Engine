@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.35.0 (Milestone 35: Asset Pipeline & Content Production)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.36.0 (Milestone 36: Scene Serialization & Prefab System)...");
         {
             sidera::Application app(config);
             app.run();
