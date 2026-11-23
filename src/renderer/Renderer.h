@@ -38,6 +38,7 @@
 #include "renderer/lighting/LightTypes.h"
 #include "renderer/lighting/GBuffer.h"
 #include "renderer/lighting/TiledLightCuller.h"
+#include "renderer/postprocess/PostProcessPipeline.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -308,6 +309,10 @@ public:
     [[nodiscard]] LightManager& getLightManager() noexcept { return m_lightManager; }
     [[nodiscard]] const GBuffer* getGBuffer() const noexcept { return m_gbuffer.get(); }
     [[nodiscard]] const TiledLightCuller* getTiledLightCuller() const noexcept { return m_tiledLightCuller.get(); }
+
+    // Advanced Post Processing (Milestone 29)
+    [[nodiscard]] PostProcessPipeline* getPostProcessPipeline() noexcept { return m_postProcessPipeline.get(); }
+    [[nodiscard]] const PostProcessPipeline* getPostProcessPipeline() const noexcept { return m_postProcessPipeline.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -490,6 +495,7 @@ private:
     LightManager m_lightManager;
     std::unique_ptr<GBuffer> m_gbuffer;
     std::unique_ptr<TiledLightCuller> m_tiledLightCuller;
+    std::unique_ptr<PostProcessPipeline> m_postProcessPipeline;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

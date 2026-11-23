@@ -1,0 +1,52 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uHDRSceneTex;
+layout(set = 0, binding = 1) uniform sampler2D uBloomTex;
+layout(set = 0, binding = 2) uniform sampler2D uSSAOTex;
+layout(set = 0, binding = 3, rgba16f) writeonly uniform image2D uOutputImg;
+
+layout(push_constant) uniform ToneMapPC {
+    vec4 params0; // x = exposure, y = bloomIntensity, z = ssaoEnabled (0/1), w = operator (0=ACES, 1=Reinhard, 2=Linear)
+    uvec4 dims;   // x = width, y = height, z = debugMode (0=Final,1=HDR,2=Bloom,3=SSAO), w = pad
+} pc;
+
+vec3 toneMapACES(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 toneMapReinhard(vec3 x) {
+    return x / (x + vec3(1.0));
+}
+
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= pc.dims.x || gid.y >= pc.dims.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(gid) + 0.5) / vec2(max(pc.dims.x, 1u), max(pc.dims.y, 1u));
+    vec3 hdr   = texture(uHDRSceneTex, uv).rgb;
+    vec3 bloom = texture(uBloomTex, uv).rgb;
+    float ao   = (pc.params0.z > 0.5) ? texture(uSSAOTex, uv).r : 1.0;
+
+    uint dbg = pc.dims.z;
+    if (dbg == 1u) { imageStore(uOutputImg, ivec2(gid), vec4(hdr, 1.0)); return; }
+    if (dbg == 2u) { imageStore(uOutputImg, ivec2(gid), vec4(bloom, 1.0)); return; }
+    if (dbg == 3u) { imageStore(uOutputImg, ivec2(gid), vec4(vec3(ao), 1.0)); return; }
+
+    // Combine SSAO + HDR + Bloom, then apply exposure and Tone Mapping
+    vec3 composed = (hdr * mix(1.0, ao, 0.35) + bloom * pc.params0.y) * pc.params0.x;
+    uint op = uint(pc.params0.w + 0.5);
+    vec3 mapped = composed;
+    if (op == 0u)      mapped = toneMapACES(composed);
+    else if (op == 1u) mapped = toneMapReinhard(composed);
+
+    imageStore(uOutputImg, ivec2(gid), vec4(clamp(mapped, 0.0, 1.0), 1.0));
+}

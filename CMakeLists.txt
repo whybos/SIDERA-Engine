@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.28.0
+    VERSION 0.29.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -141,6 +141,9 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/light_culling.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/deferred_lighting.frag
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_bloom.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_ssao.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_tonemap.comp
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -335,6 +338,9 @@ set(SIDERA_SOURCES
     src/renderer/lighting/GBuffer.cpp
     src/renderer/lighting/TiledLightCuller.h
     src/renderer/lighting/TiledLightCuller.cpp
+    src/renderer/postprocess/PostProcessSettings.h
+    src/renderer/postprocess/PostProcessPipeline.h
+    src/renderer/postprocess/PostProcessPipeline.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -784,6 +790,9 @@ add_executable(test_world_partition
     src/renderer/lighting/GBuffer.cpp
     src/renderer/lighting/TiledLightCuller.h
     src/renderer/lighting/TiledLightCuller.cpp
+    src/renderer/postprocess/PostProcessSettings.h
+    src/renderer/postprocess/PostProcessPipeline.h
+    src/renderer/postprocess/PostProcessPipeline.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1220,6 +1229,46 @@ else()
 endif()
 
 target_link_libraries(test_deferred_forward_plus
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# -----------------------------------------------------------------------------
+# Test Target: test_advanced_post_processing (Milestone 29)
+# -----------------------------------------------------------------------------
+add_executable(test_advanced_post_processing
+    tests/test_advanced_post_processing.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanShader.cpp
+    src/renderer/postprocess/PostProcessPipeline.cpp
+)
+
+target_include_directories(test_advanced_post_processing
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_advanced_post_processing
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_advanced_post_processing PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_advanced_post_processing PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_advanced_post_processing PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_advanced_post_processing
     PRIVATE
         Vulkan::Vulkan
         glfw

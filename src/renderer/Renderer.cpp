@@ -1888,6 +1888,12 @@ void Renderer::createSceneMeshes() {
     m_lightManager.clearDirty();
 
     // -----------------------------------------------------------------
+    // ADVANCED POST PROCESSING PIPELINE (Milestone 29)
+    // -----------------------------------------------------------------
+    m_postProcessPipeline = std::make_unique<PostProcessPipeline>();
+    m_postProcessPipeline->init(gbExt.width, gbExt.height, &dev);
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2417,6 +2423,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_postProcessPipeline.reset();
     m_tiledLightCuller.reset();
     m_gbuffer.reset();
     m_virtualTextureSystem.reset();
@@ -2958,6 +2965,11 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         );
 
         m_hizValid[m_currentFrame] = true;
+    }
+
+    // 4.5 Advanced Post Processing Passes (SSAO -> Bloom -> Tone Mapping, Milestone 29)
+    if (m_postProcessPipeline && m_postProcessPipeline->isGpuActive() && m_depthBuffer) {
+        m_postProcessPipeline->recordPasses(cmd, m_depthBuffer->imageView(), m_camera);
     }
 
     // Timestamp 3: end of main pass

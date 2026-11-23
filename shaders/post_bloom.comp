@@ -1,0 +1,57 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uInputTex;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D uOutputImg;
+
+layout(push_constant) uniform BloomPC {
+    vec4 params0; // x = threshold, y = softKnee, z = intensity, w = mode (0=bright, 1=blurH, 2=blurV, 3=upsample)
+    uvec4 dims;   // x = outWidth, y = outHeight, z = pad, w = pad
+} pc;
+
+vec3 prefilterBright(vec3 color, float threshold, float knee) {
+    float br = max(color.r, max(color.g, color.b));
+    float soft = br - threshold + knee;
+    soft = clamp(soft, 0.0, 2.0 * knee);
+    soft = soft * soft / max(4.0 * knee, 1e-5);
+    float contrib = max(soft, br - threshold) / max(br, 1e-5);
+    return color * max(contrib, 0.0);
+}
+
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= pc.dims.x || gid.y >= pc.dims.y) {
+        return;
+    }
+
+    vec2 invSize = 1.0 / vec2(max(pc.dims.x, 1u), max(pc.dims.y, 1u));
+    vec2 uv = (vec2(gid) + 0.5) * invSize;
+    uint mode = uint(pc.params0.w + 0.5);
+
+    vec3 result = vec3(0.0);
+    if (mode == 0u) {
+        // Bright-pass extraction with soft threshold knee
+        vec3 hdr = texture(uInputTex, uv).rgb;
+        result = prefilterBright(hdr, pc.params0.x, pc.params0.y);
+    } else if (mode == 1u || mode == 2u) {
+        // 5-tap separable Gaussian blur
+        vec2 dir = (mode == 1u) ? vec2(invSize.x, 0.0) : vec2(0.0, invSize.y);
+        const float w[5] = float[5](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+        result = texture(uInputTex, uv).rgb * w[0];
+        for (int i = 1; i < 5; ++i) {
+            result += texture(uInputTex, uv + dir * float(i)).rgb * w[i];
+            result += texture(uInputTex, uv - dir * float(i)).rgb * w[i];
+        }
+    } else {
+        // 4-tap tent upsample
+        vec2 d = invSize * 1.5;
+        result  = texture(uInputTex, uv + vec2(-d.x, -d.y)).rgb;
+        result += texture(uInputTex, uv + vec2( d.x, -d.y)).rgb;
+        result += texture(uInputTex, uv + vec2(-d.x,  d.y)).rgb;
+        result += texture(uInputTex, uv + vec2( d.x,  d.y)).rgb;
+        result *= 0.25 * pc.params0.z;
+    }
+
+    imageStore(uOutputImg, ivec2(gid), vec4(result, 1.0));
+}

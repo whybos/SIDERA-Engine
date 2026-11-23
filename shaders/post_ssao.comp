@@ -1,0 +1,80 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D uDepthOrSSAOTex;
+layout(set = 0, binding = 1, r16f) writeonly uniform image2D uOutputImg;
+
+layout(push_constant) uniform SSAOPC {
+    vec4 params0; // x = radius, y = bias, z = intensity, w = mode (0=ssao, 1=blur)
+    vec4 projInfo; // x = nearPlane, y = farPlane, z = sampleCount, w = pad
+    uvec4 dims;    // x = outWidth, y = outHeight, z = pad, w = pad
+} pc;
+
+float linearizeDepth(float d, float nearP, float farP) {
+    return (nearP * farP) / max(farP - d * (farP - nearP), 1e-5);
+}
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= pc.dims.x || gid.y >= pc.dims.y) {
+        return;
+    }
+
+    vec2 invSize = 1.0 / vec2(max(pc.dims.x, 1u), max(pc.dims.y, 1u));
+    vec2 uv = (vec2(gid) + 0.5) * invSize;
+    uint mode = uint(pc.params0.w + 0.5);
+
+    if (mode == 1u) {
+        // 3x3 bilateral-style denoise blur
+        float sum = 0.0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                sum += texture(uDepthOrSSAOTex, uv + vec2(dx, dy) * invSize).r;
+            }
+        }
+        imageStore(uOutputImg, ivec2(gid), vec4(sum / 9.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    // Depth-based hemisphere SSAO with screen-space noise rotation
+    float centerRaw = texture(uDepthOrSSAOTex, uv).r;
+    if (centerRaw >= 0.9999) {
+        imageStore(uOutputImg, ivec2(gid), vec4(1.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    float centerZ = linearizeDepth(centerRaw, pc.projInfo.x, pc.projInfo.y);
+    float radius = pc.params0.x;
+    float bias = pc.params0.y;
+    float intensity = pc.params0.z;
+    int samples = clamp(int(pc.projInfo.z + 0.5), 4, 32);
+
+    float rotAngle = hash21(vec2(gid)) * 6.2831853;
+    float c = cos(rotAngle);
+    float s = sin(rotAngle);
+    mat2 rot = mat2(c, -s, s, c);
+
+    float occlusion = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        float fi = float(i + 1) / float(samples);
+        float a = float(i) * 2.3999632; // golden angle
+        vec2 offset = rot * vec2(cos(a), sin(a)) * (radius * fi * 0.025 / max(centerZ * 0.1, 0.2));
+        float sampleRaw = texture(uDepthOrSSAOTex, clamp(uv + offset, vec2(0.001), vec2(0.999))).r;
+        float sampleZ = linearizeDepth(sampleRaw, pc.projInfo.x, pc.projInfo.y);
+
+        float rangeCheck = smoothstep(0.0, 1.0, radius / max(abs(centerZ - sampleZ), 1e-4));
+        if (sampleZ < centerZ - bias) {
+            occlusion += rangeCheck;
+        }
+    }
+
+    float ao = 1.0 - clamp((occlusion / float(samples)) * intensity, 0.0, 0.95);
+    imageStore(uOutputImg, ivec2(gid), vec4(ao, 0.0, 0.0, 1.0));
+}
