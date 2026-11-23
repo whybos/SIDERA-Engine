@@ -1836,6 +1836,25 @@ void Renderer::createSceneMeshes() {
         m_vegetationManager->setWorldStreamingManager(m_worldStreamingManager.get());
         const uint64_t vegCount = m_vegetationManager->distributeWorld(-2, 1, -2, 1, m_foliageSystem.get());
         SIDERA_LOG_INFO("Vegetation", "Distributed {} procedural biome-aware vegetation instances into FoliageSystem.", vegCount);
+
+        // -------------------------------------------------------------
+        // GPU VEGETATION RENDERING SYSTEM (Milestone 26)
+        // -------------------------------------------------------------
+        m_gpuVegetationSystem = std::make_unique<GPUVegetationSystem>();
+        GPUVegetationConfig gpuVegCfg{};
+        gpuVegCfg.initialCapacity = std::max<uint32_t>(4096u, static_cast<uint32_t>(vegCount) * 2u);
+        gpuVegCfg.maxCapacity = 1000000u;
+        gpuVegCfg.globalMaxDrawDistance = 200.0f;
+        m_gpuVegetationSystem->init(gpuVegCfg, &dev, pool);
+
+        std::vector<VegetationPlacement> allPlacements;
+        for (int32_t rz = -2; rz <= 1; ++rz) {
+            for (int32_t rx = -2; rx <= 1; ++rx) {
+                const auto& reg = m_vegetationManager->generateRegion(rx, rz);
+                allPlacements.insert(allPlacements.end(), reg.placements.begin(), reg.placements.end());
+            }
+        }
+        m_gpuVegetationSystem->uploadFromPlacements(allPlacements);
     }
 
     // -----------------------------------------------------------------
@@ -2368,6 +2387,9 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_gpuVegetationSystem.reset();
+    m_vegetationManager.reset();
+    m_worldGenerator.reset();
     m_worldPartitionManager.reset();
     if (m_worldStreamingManager) {
         m_worldStreamingManager->shutdown();
@@ -2571,6 +2593,12 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         m_commandsGenerated = m_gpuScene->getCommandsGenerated();
     } else {
         m_commandsGenerated = 0;
+    }
+
+    // 1.5 GPU Vegetation Culling, LOD Selection & Atomic Compaction (Milestone 26)
+    if (m_gpuVegetationSystem && m_gpuVegetationSystem->isGpuActive()) {
+        m_gpuVegetationSystem->beginFrame();
+        m_gpuVegetationSystem->recordCullAndCompact(cmd, m_currentFrame, m_camera, false);
     }
 
     // Timestamp 1: end of command generation

@@ -193,7 +193,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.25.0 (Milestone 25: Vegetation Distribution)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.26.0 (Milestone 26: GPU Vegetation Rendering)...");
         {
             sidera::Application app(config);
             app.run();

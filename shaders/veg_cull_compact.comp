@@ -1,0 +1,128 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct GPUVegetationInstance {
+    mat4 transform;
+    vec4 boundsSphere; // xyz = center, w = radius
+    vec4 meta0;        // x = speciesId, y = foliageTypeId, z = windPhase, w = windWeight
+    vec4 meta1;        // x = randomSeed, y = flags, z = ownerCellIdLow, w = lodBias
+};
+
+struct GPUVegetationSpeciesLOD {
+    vec4 lodDistances;   // x = lod0Max, y = lod1Max, z = lod2Max, w = maxDrawDist
+    uvec4 lodBatchIndex; // batch index for LOD 0, 1, 2, 3
+    vec4 windParams;     // x = strength, y = speed, z = freq, w = castShadow
+};
+
+struct DrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer InstanceBuffer {
+    GPUVegetationInstance instances[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer SpeciesBuffer {
+    GPUVegetationSpeciesLOD species[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer VisibleIndexBuffer {
+    uint visibleIndices[];
+};
+
+layout(std430, set = 0, binding = 3) buffer IndirectCommandBuffer {
+    DrawIndexedIndirectCommand indirectCmds[];
+};
+
+layout(std430, set = 0, binding = 4) buffer CounterBuffer {
+    uint totalVisible;
+    uint totalCulled;
+    uint lod0Count;
+    uint lod1Count;
+    uint lod2Count;
+    uint lod3Count;
+    uint overflowCount;
+    uint pad0;
+} counters;
+
+layout(push_constant) uniform CullPushConstants {
+    vec4 frustumPlanes[6];
+    vec4 cameraPosMaxDist; // xyz = cameraPos, w = globalMaxDist
+    uvec4 countsFlags;     // x = instanceCount, y = speciesCount, z = flags (b0=frustum,b1=dist,b2=shadow), w = slotCapacity
+} pc;
+
+bool isSphereVisible(vec3 center, float radius) {
+    for (int i = 0; i < 6; ++i) {
+        vec4 p = pc.frustumPlanes[i];
+        if (dot(p.xyz, center) + p.w < -radius) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.countsFlags.x) {
+        return;
+    }
+
+    GPUVegetationInstance inst = instances[gid];
+    vec3 center = inst.boundsSphere.xyz;
+    float radius = max(inst.boundsSphere.w, 0.25);
+
+    uint speciesIdx = uint(inst.meta0.x);
+    if (speciesIdx >= pc.countsFlags.y) {
+        speciesIdx = 0u;
+    }
+    GPUVegetationSpeciesLOD sp = species[speciesIdx];
+
+    bool doFrustum = (pc.countsFlags.z & 1u) != 0u;
+    bool doDist    = (pc.countsFlags.z & 2u) != 0u;
+    bool isShadow  = (pc.countsFlags.z & 4u) != 0u;
+
+    if (isShadow && sp.windParams.w < 0.5) {
+        atomicAdd(counters.totalCulled, 1u);
+        return;
+    }
+
+    float dist = distance(pc.cameraPosMaxDist.xyz, center);
+    float maxDist = min(sp.lodDistances.w, pc.cameraPosMaxDist.w);
+    if (doDist && dist > maxDist) {
+        atomicAdd(counters.totalCulled, 1u);
+        return;
+    }
+
+    if (doFrustum && !isSphereVisible(center, radius)) {
+        atomicAdd(counters.totalCulled, 1u);
+        return;
+    }
+
+    // GPU LOD selection (0..3)
+    float effDist = dist * max(inst.meta1.w, 0.25);
+    uint lod = 3u;
+    if (effDist <= sp.lodDistances.x)      lod = 0u;
+    else if (effDist <= sp.lodDistances.y) lod = 1u;
+    else if (effDist <= sp.lodDistances.z) lod = 2u;
+
+    uint batchIdx = sp.lodBatchIndex[lod];
+    uint slot = atomicAdd(indirectCmds[batchIdx].instanceCount, 1u);
+    uint slotCap = pc.countsFlags.w;
+
+    if (slot < slotCap) {
+        uint outPos = indirectCmds[batchIdx].firstInstance + slot;
+        visibleIndices[outPos] = gid;
+        atomicAdd(counters.totalVisible, 1u);
+        if (lod == 0u)      atomicAdd(counters.lod0Count, 1u);
+        else if (lod == 1u) atomicAdd(counters.lod1Count, 1u);
+        else if (lod == 2u) atomicAdd(counters.lod2Count, 1u);
+        else                atomicAdd(counters.lod3Count, 1u);
+    } else {
+        atomicAdd(counters.overflowCount, 1u);
+    }
+}

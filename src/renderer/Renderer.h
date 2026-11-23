@@ -32,6 +32,7 @@
 #include "partition/WorldPartitionManager.h"
 #include "worldgen/WorldGenerator.h"
 #include "vegetation/VegetationDistributionManager.h"
+#include "vegetation/GPUVegetationSystem.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -284,6 +285,10 @@ public:
     // Vegetation Distribution (Milestone 25)
     [[nodiscard]] VegetationDistributionManager* getVegetationManager() noexcept { return m_vegetationManager.get(); }
     [[nodiscard]] const VegetationDistributionManager* getVegetationManager() const noexcept { return m_vegetationManager.get(); }
+
+    // GPU Vegetation Rendering (Milestone 26)
+    [[nodiscard]] GPUVegetationSystem* getGPUVegetationSystem() noexcept { return m_gpuVegetationSystem.get(); }
+    [[nodiscard]] const GPUVegetationSystem* getGPUVegetationSystem() const noexcept { return m_gpuVegetationSystem.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -460,6 +465,7 @@ private:
     std::unique_ptr<WorldPartitionManager> m_worldPartitionManager;
     std::unique_ptr<WorldGenerator> m_worldGenerator;
     std::unique_ptr<VegetationDistributionManager> m_vegetationManager;
+    std::unique_ptr<GPUVegetationSystem> m_gpuVegetationSystem;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};
