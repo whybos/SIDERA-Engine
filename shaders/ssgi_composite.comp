@@ -1,0 +1,58 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D u_hdrScene;
+layout(set = 0, binding = 1) uniform sampler2D u_denoisedGI;
+layout(set = 0, binding = 2) uniform sampler2D u_rawGI;
+layout(set = 0, binding = 3) uniform sampler2D u_giHistory;
+layout(set = 0, binding = 4) uniform sampler2D u_depthTex;
+
+layout(set = 0, binding = 5) uniform GIUniformBuffer {
+    mat4 viewProj;
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    vec4 cameraPosNear;
+    vec4 rayParams;
+    vec4 temporalParams;
+    uvec4 dims;
+    uvec4 counts;
+    uvec4 debugParams;
+} u_ubo;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_hdrScene);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    vec4 sceneHDR = imageLoad(u_hdrScene, coord);
+    float rawDepth = texture(u_depthTex, uv).r;
+
+    vec4 giSample = texture(u_denoisedGI, uv);
+    float giIntensity = u_ubo.rayParams.z * u_ubo.temporalParams.w;
+    vec3 indirectDiffuse = (rawDepth < 0.9999) ? (giSample.rgb * giIntensity) : vec3(0.0);
+
+    uint debugMode = u_ubo.debugParams.x;
+    vec3 outColor;
+    if (debugMode == 0u) {
+        // Additive linear HDR indirect diffuse integration (preserves direct lighting & IBL)
+        outColor = sceneHDR.rgb + indirectDiffuse;
+    } else if (debugMode == 1u) {
+        outColor = texture(u_rawGI, uv).rgb;
+    } else if (debugMode == 2u) {
+        outColor = texture(u_giHistory, uv).rgb;
+    } else if (debugMode == 3u) {
+        outColor = giSample.rgb;
+    } else if (debugMode == 4u) {
+        outColor = vec3(giSample.a); // Confidence
+    } else if (debugMode == 5u) {
+        outColor = indirectDiffuse;
+    } else {
+        outColor = sceneHDR.rgb + indirectDiffuse;
+    }
+
+    imageStore(u_hdrScene, coord, vec4(max(outColor, vec3(0.0)), sceneHDR.a));
+}

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.30.0
+    VERSION 0.31.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -148,6 +148,10 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_temporal.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_integrate.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_composite.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssgi_trace.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssgi_temporal.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssgi_denoise.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssgi_composite.comp
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -348,6 +352,9 @@ set(SIDERA_SOURCES
     src/renderer/volumetric/VolumetricSettings.h
     src/renderer/volumetric/VolumetricPipeline.h
     src/renderer/volumetric/VolumetricPipeline.cpp
+    src/renderer/gi/GlobalIlluminationSettings.h
+    src/renderer/gi/GlobalIlluminationPipeline.h
+    src/renderer/gi/GlobalIlluminationPipeline.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -803,6 +810,9 @@ add_executable(test_world_partition
     src/renderer/volumetric/VolumetricSettings.h
     src/renderer/volumetric/VolumetricPipeline.h
     src/renderer/volumetric/VolumetricPipeline.cpp
+    src/renderer/gi/GlobalIlluminationSettings.h
+    src/renderer/gi/GlobalIlluminationPipeline.h
+    src/renderer/gi/GlobalIlluminationPipeline.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1321,6 +1331,48 @@ else()
 endif()
 
 target_link_libraries(test_volumetric_rendering
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_global_illumination (Milestone 31)
+# -----------------------------------------------------------------------------
+add_executable(test_global_illumination
+    tests/test_global_illumination.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanShader.cpp
+    src/renderer/postprocess/PostProcessPipeline.cpp
+    src/renderer/gi/GlobalIlluminationPipeline.cpp
+)
+
+target_include_directories(test_global_illumination
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_global_illumination
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_global_illumination PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_global_illumination PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_global_illumination PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_global_illumination
     PRIVATE
         Vulkan::Vulkan
         glfw

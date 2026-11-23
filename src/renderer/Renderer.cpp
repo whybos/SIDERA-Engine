@@ -1900,6 +1900,12 @@ void Renderer::createSceneMeshes() {
     m_volumetricPipeline->init(gbExt.width, gbExt.height, &dev);
 
     // -----------------------------------------------------------------
+    // GLOBAL ILLUMINATION PIPELINE (Milestone 31)
+    // -----------------------------------------------------------------
+    m_giPipeline = std::make_unique<GlobalIlluminationPipeline>();
+    m_giPipeline->init(gbExt.width, gbExt.height, &dev);
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2429,6 +2435,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_giPipeline.reset();
     m_volumetricPipeline.reset();
     m_postProcessPipeline.reset();
     m_tiledLightCuller.reset();
@@ -2972,6 +2979,20 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         );
 
         m_hizValid[m_currentFrame] = true;
+    }
+
+    // 4.3 Global Illumination Passes (Pre-GI Copy -> Hi-Z SSGI Trace -> Temporal -> Denoise -> HDR Composite, Milestone 31)
+    if (m_giPipeline && m_giPipeline->isGpuActive() && m_postProcessPipeline && m_depthBuffer) {
+        const auto* hiz = (m_currentFrame < m_hizBuffers.size()) ? m_hizBuffers[m_currentFrame].get() : nullptr;
+        m_giPipeline->recordPasses(
+            cmd,
+            m_postProcessPipeline->getHDRTarget(),
+            m_depthBuffer->imageView(),
+            hiz ? hiz->sampledImageView() : VK_NULL_HANDLE,
+            hiz ? hiz->sampler() : VK_NULL_HANDLE,
+            hiz ? hiz->getMipLevels() : 1u,
+            m_camera,
+            0u);
     }
 
     // 4.4 Volumetric Rendering Passes (Inject -> Temporal -> Integrate -> Linear HDR Composite, Milestone 30)

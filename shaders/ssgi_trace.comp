@@ -1,0 +1,139 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_preGiHdr;
+layout(set = 0, binding = 1) uniform sampler2D u_depthTex;
+layout(set = 0, binding = 2) uniform sampler2D u_hiZTex;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D u_rawGI;
+
+layout(set = 0, binding = 4) uniform GIUniformBuffer {
+    mat4 viewProj;
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    vec4 cameraPosNear;    // xyz = cameraPos, w = nearPlane
+    vec4 rayParams;        // x = maxRayDistance, y = rayThickness, z = giIntensity, w = farPlane
+    vec4 temporalParams;   // x = temporalBlend, y = depthReject, z = normalReject, w = indirectDiffuseIntensity
+    uvec4 dims;            // x = giW, y = giH, z = fullW, w = fullH
+    uvec4 counts;          // x = rayCount, y = maxSteps, z = frameIndex, w = flags (bit0=histValid, bit1=denoise, bit2=debugMode...)
+    uvec4 debugParams;     // x = debugMode, y = denoiseRadius, z = hiZMipCount, w = emissiveWeight
+} u_ubo;
+
+const float PI = 3.14159265359;
+
+float linearizeDepth(float d, float n, float f) {
+    return (n * f) / max(f - d * (f - n), 1e-4);
+}
+
+vec3 reconstructWorldPos(vec2 uv, float rawDepth) {
+    vec4 clip = vec4(uv * 2.0 - 1.0, rawDepth, 1.0);
+    vec4 world = u_ubo.invViewProj * clip;
+    return world.xyz / max(world.w, 1e-5);
+}
+
+vec3 reconstructNormalFromDepth(vec2 uv, vec2 invSize) {
+    float dc = texture(u_depthTex, uv).r;
+    float dx = texture(u_depthTex, uv + vec2(invSize.x, 0.0)).r;
+    float dy = texture(u_depthTex, uv + vec2(0.0, invSize.y)).r;
+    vec3 pc = reconstructWorldPos(uv, dc);
+    vec3 px = reconstructWorldPos(uv + vec2(invSize.x, 0.0), dx);
+    vec3 py = reconstructWorldPos(uv + vec2(0.0, invSize.y), dy);
+    vec3 n = cross(px - pc, py - pc);
+    float len = length(n);
+    return (len > 1e-5) ? (n / len) : vec3(0.0, 1.0, 0.0);
+}
+
+float interleavedGradientNoise(vec2 pixelPos, uint frame) {
+    vec2 p = pixelPos + vec2(float(frame % 64u) * 5.588238, float(frame % 64u) * 3.141592);
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+vec3 cosineHemisphere(float u1, float u2, vec3 N) {
+    float r = sqrt(clamp(u1, 0.0, 1.0));
+    float phi = 2.0 * PI * u2;
+    vec3 local = vec3(r * cos(phi), r * sin(phi), sqrt(max(1.0 - u1, 0.0)));
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(up, N));
+    vec3 B = cross(N, T);
+    return normalize(T * local.x + B * local.y + N * local.z);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= int(u_ubo.dims.x) || coord.y >= int(u_ubo.dims.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(u_ubo.dims.xy);
+    float rawDepth = texture(u_depthTex, uv).r;
+    if (rawDepth >= 0.9999) {
+        imageStore(u_rawGI, coord, vec4(0.0));
+        return;
+    }
+
+    vec2 invFull = 1.0 / vec2(u_ubo.dims.zw);
+    vec3 worldPos = reconstructWorldPos(uv, rawDepth);
+    vec3 normal = reconstructNormalFromDepth(uv, invFull);
+    vec3 viewDir = normalize(u_ubo.cameraPosNear.xyz - worldPos);
+    if (dot(normal, viewDir) < 0.0) {
+        normal = -normal;
+    }
+
+    uint rayCount = clamp(u_ubo.counts.x, 1u, 16u);
+    uint maxSteps = clamp(u_ubo.counts.y, 4u, 64u);
+    float maxDist = u_ubo.rayParams.x;
+    float thickness = u_ubo.rayParams.y;
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float farP = max(u_ubo.rayParams.w, nearP + 1.0);
+
+    vec3 accumRadiance = vec3(0.0);
+    float hitConfidence = 0.0;
+
+    float baseNoise = interleavedGradientNoise(vec2(coord), u_ubo.counts.z);
+
+    for (uint r = 0u; r < rayCount; ++r) {
+        float u1 = fract(baseNoise + float(r) * 0.61803398875);
+        float u2 = fract(baseNoise * 1.6180339 + float(r) * 0.38196601125);
+        vec3 rayDir = cosineHemisphere(u1, u2, normal);
+
+        float stepSize = maxDist / float(maxSteps);
+        vec3 rayOrigin = worldPos + normal * (thickness * 0.35);
+
+        for (uint s = 1u; s <= maxSteps; ++s) {
+            float t = (float(s) - 0.5 + baseNoise * 0.5) * stepSize;
+            vec3 samplePos = rayOrigin + rayDir * t;
+            vec4 clipPos = u_ubo.viewProj * vec4(samplePos, 1.0);
+            if (clipPos.w <= 1e-4) break;
+            vec3 ndc = clipPos.xyz / clipPos.w;
+            vec2 sampleUV = ndc.xy * 0.5 + 0.5;
+            if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+                break;
+            }
+
+            // Hierarchical coarse check via Hi-Z mip 1 before fine depth test
+            float hiZDepth = textureLod(u_hiZTex, sampleUV, 1.0).r;
+            if (ndc.z < hiZDepth - 0.02) {
+                continue;
+            }
+
+            float sceneDepth = texture(u_depthTex, sampleUV).r;
+            float rayLin = linearizeDepth(ndc.z, nearP, farP);
+            float sceneLin = linearizeDepth(sceneDepth, nearP, farP);
+            float delta = rayLin - sceneLin;
+
+            if (delta > 0.0 && delta < thickness) {
+                vec3 hitRad = texture(u_preGiHdr, sampleUV).rgb;
+                float distAtten = 1.0 / (1.0 + t * t * 0.08);
+                // Clamp fireflies for temporal stability
+                hitRad = min(hitRad, vec3(8.0));
+                accumRadiance += hitRad * distAtten;
+                hitConfidence += 1.0;
+                break;
+            }
+        }
+    }
+
+    vec3 avgRad = accumRadiance / float(rayCount);
+    float conf = hitConfidence / float(rayCount);
+    imageStore(u_rawGI, coord, vec4(max(avgRad, vec3(0.0)), clamp(conf, 0.0, 1.0)));
+}
