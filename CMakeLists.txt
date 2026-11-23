@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.38.0
+    VERSION 0.39.1
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -1650,3 +1650,50 @@ target_link_libraries(test_audio_system
     PRIVATE
         glm::glm
 )
+
+
+# -----------------------------------------------------------------------------
+# SIDERA Editor Core & Application (Milestone 39.1) — Strictly decoupled from Runtime
+# -----------------------------------------------------------------------------
+option(SIDERA_BUILD_EDITOR "Build SIDERA Editor Core & Application" ON)
+
+if(SIDERA_BUILD_EDITOR)
+    add_library(sidera_editor_core STATIC
+        src/editor/EditorTypes.h
+        src/editor/EditorCommand.h
+        src/editor/EditorSelection.h
+        src/editor/EditorPanel.h
+        src/editor/EditorApplication.h
+        src/editor/EditorApplication.cpp
+        src/assets/AssetDatabase.cpp
+        src/scene/Scene.cpp
+        src/scene/SceneSerializer.cpp
+    )
+
+    target_include_directories(sidera_editor_core
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    if(MSVC)
+        target_compile_options(sidera_editor_core PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+        target_compile_definitions(sidera_editor_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(sidera_editor_core PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    target_link_libraries(sidera_editor_core
+        PUBLIC
+            glm::glm
+    )
+
+    add_executable(sidera_editor
+        src/editor/editor_main.cpp
+    )
+    target_link_libraries(sidera_editor PRIVATE sidera_editor_core)
+
+    add_executable(test_editor_core
+        tests/test_editor_core.cpp
+    )
+    target_link_libraries(test_editor_core PRIVATE sidera_editor_core)
+endif()
