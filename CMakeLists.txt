@@ -1,10 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.41.0
-    DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
+    VERSION 1.0.0
+    DESCRIPTION "SIDERA Engine 1.0 - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
+
+option(SIDERA_BUILD_TESTS "Build SIDERA Engine automated test targets" ON)
+option(SIDERA_BUILD_EXAMPLES "Include SIDERA Engine reusable example projects in install packages" ON)
 
 # ------------------------------------------------------------------------------
 # C++20 Standard Configuration
@@ -1761,3 +1764,51 @@ if(SIDERA_BUILD_FRAMEWORKS)
         target_compile_options(test_rpg_framework PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
+
+# -----------------------------------------------------------------------------
+# Milestone 42 — SIDERA Engine 1.0 Release Validation Target & Packaging (CPack)
+# -----------------------------------------------------------------------------
+if(SIDERA_BUILD_TESTS AND SIDERA_BUILD_EDITOR)
+    add_executable(test_engine_1_0_release
+        tests/test_engine_1_0_release.cpp
+    )
+    target_link_libraries(test_engine_1_0_release PRIVATE sidera_editor_core)
+    if(MSVC)
+        target_compile_options(test_engine_1_0_release PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+        target_compile_definitions(test_engine_1_0_release PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(test_engine_1_0_release PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+# Distribution install layout (clean end-user package without build intermediates)
+install(TARGETS sidera RUNTIME DESTINATION bin)
+if(SIDERA_BUILD_EDITOR)
+    install(TARGETS sidera_editor RUNTIME DESTINATION bin)
+endif()
+if(TARGET vulkan)
+    install(FILES $<TARGET_FILE:vulkan> DESTINATION bin)
+endif()
+install(DIRECTORY $<TARGET_FILE_DIR:sidera>/shaders/ DESTINATION bin/shaders FILES_MATCHING PATTERN "*.spv")
+if(SIDERA_BUILD_EXAMPLES)
+    install(DIRECTORY examples/rpg_reference_project DESTINATION examples)
+endif()
+install(FILES
+    README.md
+    docs/THIRD_PARTY_LICENSES.md
+    docs/releases/SIDERA_ENGINE_1_0_RC1.md
+    docs/guides/SIDERA_BUILD_RUN_AND_PUBLISH_GUIDE.md
+    DESTINATION docs
+)
+install(FILES
+    scripts/Install-SIDERA.ps1
+    scripts/Uninstall-SIDERA.ps1
+    DESTINATION scripts
+)
+
+set(CPACK_PACKAGE_NAME "SIDERA")
+set(CPACK_PACKAGE_VENDOR "SIDERA Engine")
+set(CPACK_PACKAGE_VERSION "1.0.0-rc1")
+set(CPACK_PACKAGE_FILE_NAME "SIDERA-1.0.0-rc1-win64")
+set(CPACK_GENERATOR "ZIP")
+include(CPack)

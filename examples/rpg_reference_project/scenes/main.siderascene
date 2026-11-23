@@ -1,0 +1,6 @@
+SIDERA_SCENE
+schema_version 1
+name MainReferenceScene
+entity 1 PlayerStart 0 1 0
+entity 100 GuideNPC 2 0 0
+entity 200 Companion 0 0 -2

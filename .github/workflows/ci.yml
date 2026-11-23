@@ -1,0 +1,38 @@
+name: SIDERA Engine 1.0 CI (Windows MSVC)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DSIDERA_BUILD_EDITOR=ON -DSIDERA_BUILD_FRAMEWORKS=ON -DSIDERA_BUILD_TESTS=ON
+
+      - name: Build Release
+        run: cmake --build build --config Release --target sidera sidera_editor test_engine_1_0_release test_rpg_framework test_runtime_systems -j
+
+      - name: Build Debug
+        run: cmake --build build --config Debug --target sidera sidera_editor test_engine_1_0_release test_rpg_framework -j
+
+      - name: Run Unit & Integration Tests (Release)
+        run: |
+          .\build\Release\test_engine_1_0_release.exe
+          .\build\Release\test_rpg_framework.exe
+          .\build\Release\test_runtime_systems.exe
+
+      - name: Create Portable ZIP Package (CPack)
+        run: cpack --config build/CPackConfig.cmake -C Release -B build/packages
+
+      - name: Upload Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIDERA-1.0.0-rc1-win64
+          path: build/packages/*.zip

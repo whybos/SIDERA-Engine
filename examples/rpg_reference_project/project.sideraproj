@@ -1,0 +1,6 @@
+SIDERA_PROJECT
+schema_version 1
+name RPG_Reference_Project
+engine_version 1.0.0-rc1
+startup_scene scenes/main.siderascene
+assets_dir assets

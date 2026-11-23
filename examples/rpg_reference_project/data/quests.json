@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "quests": [
+    {
+      "id": "q_beacon",
+      "title_key": "quest.beacon.title",
+      "objectives": [
+        {
+          "id": "find_relic",
+          "trigger_event": "world.relic_collected",
+          "payload": "beacon_relic",
+          "required_count": 1
+        }
+      ],
+      "reward_event": "reward.grant_item",
+      "reward_payload": "relic_amulet"
+    }
+  ]
+}

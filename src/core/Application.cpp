@@ -1,5 +1,6 @@
 #include "core/Application.h"
 #include "core/Log.h"
+#include "core/Version.h"
 
 #include <chrono>
 #include <format>
@@ -9,7 +10,7 @@
 namespace sidera {
 
 namespace {
-constexpr std::string_view kEngineVersion = "v0.22.0";
+constexpr std::string_view kEngineVersion = kSideraVersionString;
 } // namespace
 
 Application::Application(const ApplicationConfig& config)

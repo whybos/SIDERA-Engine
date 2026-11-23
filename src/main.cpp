@@ -1,8 +1,10 @@
 #include "core/Application.h"
 #include "core/Log.h"
+#include "core/Version.h"
 
 #include <cstdlib>
 #include <exception>
+#include <iostream>
 #include <string_view>
 
 int main(int argc, char* argv[]) {
@@ -189,6 +191,9 @@ int main(int argc, char* argv[]) {
             else if (wp == "desert") config.worldPreset = sidera::WorldPreset::DesertWorld;
             else if (wp == "alpine") config.worldPreset = sidera::WorldPreset::AlpineWorld;
             else config.worldPreset = sidera::WorldPreset::Balanced;
+        } else if (arg == "--version") {
+            std::cout << sidera::kSideraEngineBanner << "\n";
+            return EXIT_SUCCESS;
         } else if (arg == "--render-path" && i + 1 < argc) {
             const std::string_view rp(argv[++i]);
             if (rp == "forward") config.renderPath = sidera::RenderPath::Forward;
@@ -198,7 +203,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.40.0 (Milestone 40: Engine Stability & Runtime Systems)...");
+        SIDERA_LOG_INFO("Core", "Starting {}...", sidera::kSideraEngineBanner);
         {
             sidera::Application app(config);
             app.run();
