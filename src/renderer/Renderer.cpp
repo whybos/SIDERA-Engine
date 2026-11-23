@@ -1912,6 +1912,18 @@ void Renderer::createSceneMeshes() {
     m_reflectionPipeline->init(gbExt.width, gbExt.height, &dev);
 
     // -----------------------------------------------------------------
+    // ADVANCED GPU PROFILER (Milestone 33)
+    // -----------------------------------------------------------------
+    m_gpuProfiler = std::make_unique<GPUProfiler>();
+    m_gpuProfiler->init(&dev, dev.getQueueFamilies().graphicsFamily.value_or(0u));
+    auto& mem = m_gpuProfiler->getMemoryStats();
+    mem.clear();
+    if (m_gbuffer) mem.addRecord({"GBuffer", GPUMemorySubsystem::GBuffer, m_gbuffer->getMemoryUsageBytes(), 0, true});
+    if (m_volumetricPipeline) mem.addRecord({"Volumetric3DVolumes", GPUMemorySubsystem::Volumetrics, m_volumetricPipeline->getStats().gpuMemoryBytes, 0, true});
+    if (m_giPipeline) mem.addRecord({"SSGITargets", GPUMemorySubsystem::GlobalIllumination, m_giPipeline->getStats().gpuMemoryBytes, 0, true});
+    if (m_reflectionPipeline) mem.addRecord({"SSRTargets", GPUMemorySubsystem::Reflections, m_reflectionPipeline->getStats().gpuMemoryBytes, 0, true});
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2441,6 +2453,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_gpuProfiler.reset();
     m_reflectionPipeline.reset();
     m_giPipeline.reset();
     m_volumetricPipeline.reset();
@@ -2988,8 +3001,13 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         m_hizValid[m_currentFrame] = true;
     }
 
+    if (m_gpuProfiler) {
+        m_gpuProfiler->beginFrame(cmd, m_currentFrame, m_renderedFrames);
+    }
+
     // 4.3 Global Illumination Passes (Pre-GI Copy -> Hi-Z SSGI Trace -> Temporal -> Denoise -> HDR Composite, Milestone 31)
     if (m_giPipeline && m_giPipeline->isGpuActive() && m_postProcessPipeline && m_depthBuffer) {
+        const uint32_t pIdx = m_gpuProfiler ? m_gpuProfiler->beginPass(cmd, m_currentFrame, "GlobalIllumination_SSGI") : 0xFFFFFFFFu;
         const auto* hiz = (m_currentFrame < m_hizBuffers.size()) ? m_hizBuffers[m_currentFrame].get() : nullptr;
         m_giPipeline->recordPasses(
             cmd,
@@ -3000,11 +3018,13 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             hiz ? hiz->getMipLevels() : 1u,
             m_camera,
             0u);
+        if (m_gpuProfiler) m_gpuProfiler->endPass(cmd, m_currentFrame, pIdx);
     }
 
     // 4.35 Hybrid Real-Time Reflection Passes (Pre-Refl Copy -> Hi-Z SSR -> Temporal -> Denoise -> Probe/Env Composite, Milestone 32)
     if (m_reflectionPipeline && m_reflectionPipeline->isGpuActive() &&
         m_postProcessPipeline && m_depthBuffer && m_iblMaps.prefilteredMap) {
+        const uint32_t pIdx = m_gpuProfiler ? m_gpuProfiler->beginPass(cmd, m_currentFrame, "Reflections_HybridSSR") : 0xFFFFFFFFu;
         const auto* hiz = (m_currentFrame < m_hizBuffers.size()) ? m_hizBuffers[m_currentFrame].get() : nullptr;
         m_reflectionPipeline->recordPasses(
             cmd,
@@ -3017,11 +3037,13 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             m_iblMaps.prefilteredMap->mipLevels(),
             m_camera,
             0u);
+        if (m_gpuProfiler) m_gpuProfiler->endPass(cmd, m_currentFrame, pIdx);
     }
 
     // 4.4 Volumetric Rendering Passes (Inject -> Temporal -> Integrate -> Linear HDR Composite, Milestone 30)
     if (m_volumetricPipeline && m_volumetricPipeline->isGpuActive() &&
         m_postProcessPipeline && m_depthBuffer && m_shadowMap) {
+        const uint32_t pIdx = m_gpuProfiler ? m_gpuProfiler->beginPass(cmd, m_currentFrame, "Volumetrics_Froxel") : 0xFFFFFFFFu;
         m_volumetricPipeline->recordPasses(
             cmd,
             m_postProcessPipeline->getHDRTarget(),
@@ -3034,11 +3056,18 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             m_camera,
             m_lightManager,
             0u);
+        if (m_gpuProfiler) m_gpuProfiler->endPass(cmd, m_currentFrame, pIdx);
     }
 
     // 4.5 Advanced Post Processing Passes (SSAO -> Bloom -> Tone Mapping, Milestone 29)
     if (m_postProcessPipeline && m_postProcessPipeline->isGpuActive() && m_depthBuffer) {
+        const uint32_t pIdx = m_gpuProfiler ? m_gpuProfiler->beginPass(cmd, m_currentFrame, "PostProcess_HDR_Bloom_SSAO") : 0xFFFFFFFFu;
         m_postProcessPipeline->recordPasses(cmd, m_depthBuffer->imageView(), m_camera);
+        if (m_gpuProfiler) m_gpuProfiler->endPass(cmd, m_currentFrame, pIdx);
+    }
+
+    if (m_gpuProfiler) {
+        m_gpuProfiler->endFrame(m_currentFrame);
     }
 
     // Timestamp 3: end of main pass

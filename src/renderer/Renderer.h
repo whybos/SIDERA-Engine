@@ -42,6 +42,7 @@
 #include "renderer/volumetric/VolumetricPipeline.h"
 #include "renderer/gi/GlobalIlluminationPipeline.h"
 #include "renderer/reflection/ReflectionPipeline.h"
+#include "profiling/GPUProfiler.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -328,6 +329,12 @@ public:
     // Real-Time Reflection System (Milestone 32)
     [[nodiscard]] ReflectionPipeline* getReflectionPipeline() noexcept { return m_reflectionPipeline.get(); }
     [[nodiscard]] const ReflectionPipeline* getReflectionPipeline() const noexcept { return m_reflectionPipeline.get(); }
+
+    // Advanced GPU Profiling & Visual Benchmark System (Milestone 33)
+    [[nodiscard]] GPUProfiler* getGPUProfiler() noexcept { return m_gpuProfiler.get(); }
+    [[nodiscard]] const GPUProfiler* getGPUProfiler() const noexcept { return m_gpuProfiler.get(); }
+    [[nodiscard]] CPUProfiler& getCPUProfiler() noexcept { return m_cpuProfiler; }
+    [[nodiscard]] const CPUProfiler& getCPUProfiler() const noexcept { return m_cpuProfiler; }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -514,6 +521,8 @@ private:
     std::unique_ptr<VolumetricPipeline> m_volumetricPipeline;
     std::unique_ptr<GlobalIlluminationPipeline> m_giPipeline;
     std::unique_ptr<ReflectionPipeline> m_reflectionPipeline;
+    std::unique_ptr<GPUProfiler> m_gpuProfiler;
+    CPUProfiler m_cpuProfiler;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

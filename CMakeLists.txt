@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.32.0
+    VERSION 0.33.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -362,6 +362,9 @@ set(SIDERA_SOURCES
     src/renderer/reflection/ReflectionSettings.h
     src/renderer/reflection/ReflectionPipeline.h
     src/renderer/reflection/ReflectionPipeline.cpp
+    src/profiling/GPUProfileTypes.h
+    src/profiling/GPUProfiler.h
+    src/profiling/GPUProfiler.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -823,6 +826,9 @@ add_executable(test_world_partition
     src/renderer/reflection/ReflectionSettings.h
     src/renderer/reflection/ReflectionPipeline.h
     src/renderer/reflection/ReflectionPipeline.cpp
+    src/profiling/GPUProfileTypes.h
+    src/profiling/GPUProfiler.h
+    src/profiling/GPUProfiler.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1425,6 +1431,44 @@ else()
 endif()
 
 target_link_libraries(test_reflection_system
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_gpu_profiling (Milestone 33)
+# -----------------------------------------------------------------------------
+add_executable(test_gpu_profiling
+    tests/test_gpu_profiling.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/profiling/GPUProfiler.cpp
+)
+
+target_include_directories(test_gpu_profiling
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_gpu_profiling
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_gpu_profiling PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_gpu_profiling PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_gpu_profiling PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_gpu_profiling
     PRIVATE
         Vulkan::Vulkan
         glfw
