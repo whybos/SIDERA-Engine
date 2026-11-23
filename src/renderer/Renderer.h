@@ -41,6 +41,7 @@
 #include "renderer/postprocess/PostProcessPipeline.h"
 #include "renderer/volumetric/VolumetricPipeline.h"
 #include "renderer/gi/GlobalIlluminationPipeline.h"
+#include "renderer/reflection/ReflectionPipeline.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -323,6 +324,10 @@ public:
     // Global Illumination (Milestone 31)
     [[nodiscard]] GlobalIlluminationPipeline* getGlobalIlluminationPipeline() noexcept { return m_giPipeline.get(); }
     [[nodiscard]] const GlobalIlluminationPipeline* getGlobalIlluminationPipeline() const noexcept { return m_giPipeline.get(); }
+
+    // Real-Time Reflection System (Milestone 32)
+    [[nodiscard]] ReflectionPipeline* getReflectionPipeline() noexcept { return m_reflectionPipeline.get(); }
+    [[nodiscard]] const ReflectionPipeline* getReflectionPipeline() const noexcept { return m_reflectionPipeline.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -508,6 +513,7 @@ private:
     std::unique_ptr<PostProcessPipeline> m_postProcessPipeline;
     std::unique_ptr<VolumetricPipeline> m_volumetricPipeline;
     std::unique_ptr<GlobalIlluminationPipeline> m_giPipeline;
+    std::unique_ptr<ReflectionPipeline> m_reflectionPipeline;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

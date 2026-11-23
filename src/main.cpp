@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.31.0 (Milestone 31: Global Illumination)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.32.0 (Milestone 32: Real-Time Reflection System)...");
         {
             sidera::Application app(config);
             app.run();

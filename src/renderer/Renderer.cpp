@@ -1906,6 +1906,12 @@ void Renderer::createSceneMeshes() {
     m_giPipeline->init(gbExt.width, gbExt.height, &dev);
 
     // -----------------------------------------------------------------
+    // REAL-TIME REFLECTION PIPELINE (Milestone 32)
+    // -----------------------------------------------------------------
+    m_reflectionPipeline = std::make_unique<ReflectionPipeline>();
+    m_reflectionPipeline->init(gbExt.width, gbExt.height, &dev);
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2435,6 +2441,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_reflectionPipeline.reset();
     m_giPipeline.reset();
     m_volumetricPipeline.reset();
     m_postProcessPipeline.reset();
@@ -2991,6 +2998,23 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             hiz ? hiz->sampledImageView() : VK_NULL_HANDLE,
             hiz ? hiz->sampler() : VK_NULL_HANDLE,
             hiz ? hiz->getMipLevels() : 1u,
+            m_camera,
+            0u);
+    }
+
+    // 4.35 Hybrid Real-Time Reflection Passes (Pre-Refl Copy -> Hi-Z SSR -> Temporal -> Denoise -> Probe/Env Composite, Milestone 32)
+    if (m_reflectionPipeline && m_reflectionPipeline->isGpuActive() &&
+        m_postProcessPipeline && m_depthBuffer && m_iblMaps.prefilteredMap) {
+        const auto* hiz = (m_currentFrame < m_hizBuffers.size()) ? m_hizBuffers[m_currentFrame].get() : nullptr;
+        m_reflectionPipeline->recordPasses(
+            cmd,
+            m_postProcessPipeline->getHDRTarget(),
+            m_depthBuffer->imageView(),
+            hiz ? hiz->sampledImageView() : VK_NULL_HANDLE,
+            hiz ? hiz->sampler() : VK_NULL_HANDLE,
+            m_iblMaps.prefilteredMap->imageView(),
+            m_iblMaps.prefilteredMap->sampler(),
+            m_iblMaps.prefilteredMap->mipLevels(),
             m_camera,
             0u);
     }

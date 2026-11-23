@@ -1,0 +1,143 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct ReflectionProbe {
+    vec4 positionRadius; // xyz = center, w = radius
+    vec4 boxMinPriority; // xyz = boxMin, w = priority
+    vec4 boxMaxBlend;    // xyz = boxMax, w = blendDistance
+    vec4 params;         // x = intensity, y = enabled, z = boxProjected, w = probeId
+};
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D u_hdrScene;
+layout(set = 0, binding = 1) uniform sampler2D u_denoisedSSR;
+layout(set = 0, binding = 2) uniform sampler2D u_rawSSR;
+layout(set = 0, binding = 3) uniform sampler2D u_depthTex;
+layout(set = 0, binding = 4) uniform samplerCube u_envPrefiltered;
+layout(std430, set = 0, binding = 5) readonly buffer ProbeBuffer {
+    ReflectionProbe probes[];
+} u_probes;
+
+layout(set = 0, binding = 6) uniform ReflectionUBO {
+    mat4 viewProj;
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    vec4 cameraPosNear;
+    vec4 rayParams;
+    vec4 blendParams;
+    uvec4 dims;
+    uvec4 counts;
+    uvec4 debugParams;
+} u_ubo;
+
+vec3 reconstructWorldPos(vec2 uv, float rawDepth) {
+    vec4 world = u_ubo.invViewProj * vec4(uv * 2.0 - 1.0, rawDepth, 1.0);
+    return world.xyz / max(world.w, 1e-5);
+}
+
+vec3 reconstructNormalFromDepth(vec2 uv, vec2 invSize) {
+    float dc = texture(u_depthTex, uv).r;
+    float dx = texture(u_depthTex, uv + vec2(invSize.x, 0.0)).r;
+    float dy = texture(u_depthTex, uv + vec2(0.0, invSize.y)).r;
+    vec3 pc = reconstructWorldPos(uv, dc);
+    vec3 px = reconstructWorldPos(uv + vec2(invSize.x, 0.0), dx);
+    vec3 py = reconstructWorldPos(uv + vec2(0.0, invSize.y), dy);
+    vec3 n = cross(px - pc, py - pc);
+    float len = length(n);
+    return (len > 1e-5) ? (n / len) : vec3(0.0, 1.0, 0.0);
+}
+
+vec3 boxProjectDir(vec3 worldPos, vec3 reflDir, vec3 probePos, vec3 bMin, vec3 bMax) {
+    vec3 safeR = mix(reflDir, vec3(1e-4), lessThan(abs(reflDir), vec3(1e-4)));
+    vec3 tMax = (bMax - worldPos) / safeR;
+    vec3 tMin = (bMin - worldPos) / safeR;
+    vec3 tFar = max(tMax, tMin);
+    float tHit = min(tFar.x, min(tFar.y, tFar.z));
+    vec3 hitPos = worldPos + reflDir * max(tHit, 0.0);
+    return normalize(hitPos - probePos);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_hdrScene);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    vec4 sceneHDR = imageLoad(u_hdrScene, coord);
+    float rawDepth = texture(u_depthTex, uv).r;
+    if (rawDepth >= 0.9999) {
+        return;
+    }
+
+    vec3 worldPos = reconstructWorldPos(uv, rawDepth);
+    vec3 normal = reconstructNormalFromDepth(uv, 1.0 / vec2(size));
+    vec3 viewDir = normalize(u_ubo.cameraPosNear.xyz - worldPos);
+    if (dot(normal, viewDir) < 0.0) normal = -normal;
+    vec3 reflDir = normalize(reflect(-viewDir, normal));
+
+    // Fresnel-Schlick grazing specular factor (dielectric F0 = 0.04)
+    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float fresnel = 0.04 + (1.0 - 0.04) * pow(1.0 - NdotV, 5.0);
+
+    // 1. Global prefiltered environment fallback
+    float maxMip = max(float(u_ubo.debugParams.z) - 1.0, 0.0);
+    vec3 envColor = ((u_ubo.counts.w & 16u) != 0u)
+        ? textureLod(u_envPrefiltered, reflDir, 0.25 * maxMip).rgb
+        : vec3(0.0);
+
+    // 2. Local reflection probe selection & box-projected blending
+    vec3 probeColor = envColor;
+    float totalProbeWeight = 0.0;
+    if ((u_ubo.counts.w & 8u) != 0u) {
+        vec3 accumProbe = vec3(0.0);
+        uint probeCount = u_ubo.counts.z;
+        for (uint i = 0u; i < probeCount; ++i) {
+            ReflectionProbe p = u_probes.probes[i];
+            if (p.params.y < 0.5) continue;
+            float dist = length(worldPos - p.positionRadius.xyz);
+            float rad = max(p.positionRadius.w, 0.1);
+            if (dist < rad) {
+                float blendDist = max(p.boxMaxBlend.w, 0.1);
+                float w = clamp((rad - dist) / blendDist, 0.0, 1.0);
+                vec3 pDir = (p.params.z > 0.5)
+                    ? boxProjectDir(worldPos, reflDir, p.positionRadius.xyz, p.boxMinPriority.xyz, p.boxMaxBlend.xyz)
+                    : reflDir;
+                vec3 sampleC = textureLod(u_envPrefiltered, pDir, 0.2 * maxMip).rgb * p.params.x;
+                accumProbe += sampleC * w;
+                totalProbeWeight += w;
+            }
+        }
+        if (totalProbeWeight > 1e-4) {
+            probeColor = mix(envColor, accumProbe / totalProbeWeight, clamp(totalProbeWeight, 0.0, 1.0));
+        }
+    }
+
+    // 3. Hybrid SSR + Probe/Env composition (confidence-weighted, energy-conscious)
+    vec4 ssr = texture(u_denoisedSSR, uv);
+    float conf = clamp(ssr.a, 0.0, 1.0);
+    vec3 hybridRefl = mix(probeColor * u_ubo.blendParams.z, ssr.rgb, conf);
+
+    uint debugMode = u_ubo.debugParams.x;
+    vec3 outColor;
+    if (debugMode == 0u) {
+        // Blend SSR/Probe delta with Fresnel weight to avoid double-counting global IBL
+        float reflWeight = fresnel * u_ubo.blendParams.y * max(conf, clamp(totalProbeWeight, 0.0, 1.0) * 0.35);
+        outColor = mix(sceneHDR.rgb, hybridRefl, clamp(reflWeight, 0.0, 0.85));
+    } else if (debugMode == 1u) {
+        outColor = texture(u_rawSSR, uv).rgb;
+    } else if (debugMode == 2u) {
+        outColor = vec3(conf);
+    } else if (debugMode == 3u) {
+        outColor = probeColor;
+    } else if (debugMode == 4u) {
+        outColor = envColor;
+    } else if (debugMode == 5u) {
+        outColor = ssr.rgb;
+    } else {
+        outColor = hybridRefl;
+    }
+
+    imageStore(u_hdrScene, coord, vec4(max(outColor, vec3(0.0)), sceneHDR.a));
+}

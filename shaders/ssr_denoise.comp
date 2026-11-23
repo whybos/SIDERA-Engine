@@ -1,0 +1,60 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_ssrHistory;
+layout(set = 0, binding = 1) uniform sampler2D u_depthTex;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D u_denoisedSSR;
+
+layout(set = 0, binding = 3) uniform ReflectionUBO {
+    mat4 viewProj;
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    vec4 cameraPosNear;
+    vec4 rayParams;
+    vec4 blendParams;
+    uvec4 dims;
+    uvec4 counts;
+    uvec4 debugParams;
+} u_ubo;
+
+float linearizeDepth(float d, float n, float f) {
+    return (n * f) / max(f - d * (f - n), 1e-4);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= int(u_ubo.dims.x) || coord.y >= int(u_ubo.dims.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(u_ubo.dims.xy);
+    vec4 centerVal = texture(u_ssrHistory, uv);
+
+    if ((u_ubo.counts.w & 2u) == 0u) {
+        imageStore(u_denoisedSSR, coord, centerVal);
+        return;
+    }
+
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float farP = max(u_ubo.rayParams.w, nearP + 1.0);
+    float centerDepth = linearizeDepth(texture(u_depthTex, uv).r, nearP, farP);
+
+    int radius = int(clamp(u_ubo.debugParams.y, 1u, 3u));
+    vec2 texel = 1.0 / vec2(u_ubo.dims.xy);
+
+    vec4 accum = vec4(0.0);
+    float wSum = 0.0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            vec2 sUV = uv + vec2(float(dx), float(dy)) * texel;
+            float sDepth = linearizeDepth(texture(u_depthTex, sUV).r, nearP, farP);
+            float depthDiff = abs(sDepth - centerDepth) / max(centerDepth, 0.1);
+            float w = exp(-depthDiff * 20.0) * exp(-float(dx * dx + dy * dy) / (2.0 * float(radius * radius) + 0.5));
+            accum += texture(u_ssrHistory, sUV) * w;
+            wSum += w;
+        }
+    }
+
+    imageStore(u_denoisedSSR, coord, (wSum > 1e-5) ? (accum / wSum) : centerVal);
+}
