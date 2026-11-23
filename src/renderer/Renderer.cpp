@@ -1894,6 +1894,12 @@ void Renderer::createSceneMeshes() {
     m_postProcessPipeline->init(gbExt.width, gbExt.height, &dev);
 
     // -----------------------------------------------------------------
+    // VOLUMETRIC RENDERING PIPELINE (Milestone 30)
+    // -----------------------------------------------------------------
+    m_volumetricPipeline = std::make_unique<VolumetricPipeline>();
+    m_volumetricPipeline->init(gbExt.width, gbExt.height, &dev);
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2423,6 +2429,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_volumetricPipeline.reset();
     m_postProcessPipeline.reset();
     m_tiledLightCuller.reset();
     m_gbuffer.reset();
@@ -2965,6 +2972,23 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         );
 
         m_hizValid[m_currentFrame] = true;
+    }
+
+    // 4.4 Volumetric Rendering Passes (Inject -> Temporal -> Integrate -> Linear HDR Composite, Milestone 30)
+    if (m_volumetricPipeline && m_volumetricPipeline->isGpuActive() &&
+        m_postProcessPipeline && m_depthBuffer && m_shadowMap) {
+        m_volumetricPipeline->recordPasses(
+            cmd,
+            m_postProcessPipeline->getHDRTarget(),
+            m_depthBuffer->imageView(),
+            m_shadowMap->imageView(),
+            m_shadowMap->sampler(),
+            m_cascadeMatrices,
+            m_cascadeSplits,
+            m_cascadeCount,
+            m_camera,
+            m_lightManager,
+            0u);
     }
 
     // 4.5 Advanced Post Processing Passes (SSAO -> Bloom -> Tone Mapping, Milestone 29)

@@ -1,0 +1,92 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(set = 0, binding = 0) uniform sampler3D u_currentInject;
+layout(set = 0, binding = 1) uniform sampler3D u_prevHistory;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image3D u_currHistory;
+
+layout(set = 0, binding = 3) uniform VolumetricUBO {
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    mat4 cascadeMatrices[4];
+    vec4 cascadeSplits;
+    vec4 cameraPosNear;
+    vec4 fogParams;
+    vec4 scatterParams;
+    vec4 fogColorMaxDist;
+    vec4 scatterColorFlags;
+    uvec4 gridCounts;
+    uvec4 extraCounts;
+    vec4 temporalParams;
+} u_ubo;
+
+float sliceToDepth(float sliceNorm, float nearP, float farP) {
+    return nearP * pow(farP / max(nearP, 1e-4), sliceNorm);
+}
+
+float depthToSliceNorm(float linearDepth, float nearP, float farP) {
+    float ratio = max(farP / max(nearP, 1e-4), 1.001);
+    return clamp(log(max(linearDepth, nearP) / max(nearP, 1e-4)) / log(ratio), 0.0, 1.0);
+}
+
+void main() {
+    uvec3 gid = gl_GlobalInvocationID;
+    if (gid.x >= u_ubo.gridCounts.x || gid.y >= u_ubo.gridCounts.y || gid.z >= u_ubo.gridCounts.z) {
+        return;
+    }
+
+    vec3 uvw = (vec3(gid) + 0.5) / vec3(u_ubo.gridCounts.xyz);
+    vec4 curr = texture(u_currentInject, uvw);
+
+    bool historyValid = (u_ubo.extraCounts.z != 0u);
+    float blend = clamp(u_ubo.temporalParams.x, 0.0, 0.98);
+
+    if (!historyValid || blend <= 0.001) {
+        imageStore(u_currHistory, ivec3(gid), curr);
+        return;
+    }
+
+    // Reconstruct current froxel world position
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float maxDist = max(u_ubo.fogColorMaxDist.w, nearP + 1.0);
+    float linearDepth = sliceToDepth(uvw.z, nearP, maxDist);
+
+    vec2 ndc = uvw.xy * 2.0 - 1.0;
+    vec4 farClip = u_ubo.invViewProj * vec4(ndc, 1.0, 1.0);
+    vec3 farWorld = farClip.xyz / max(farClip.w, 1e-5);
+    vec3 camPos = u_ubo.cameraPosNear.xyz;
+    vec3 worldPos = camPos + normalize(farWorld - camPos) * linearDepth;
+
+    // Project into previous frame clip space
+    vec4 prevClip = u_ubo.prevViewProj * vec4(worldPos, 1.0);
+    if (prevClip.w <= 1e-4) {
+        imageStore(u_currHistory, ivec3(gid), curr);
+        return;
+    }
+    vec2 prevUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+    float prevSlice = depthToSliceNorm(prevClip.w, nearP, maxDist);
+
+    if (prevUV.x < 0.0 || prevUV.x > 1.0 || prevUV.y < 0.0 || prevUV.y > 1.0) {
+        imageStore(u_currHistory, ivec3(gid), curr);
+        return;
+    }
+
+    // 3x3x1 neighborhood clamping to suppress ghosting
+    vec3 texel = 1.0 / vec3(u_ubo.gridCounts.xyz);
+    vec4 nMin = curr;
+    vec4 nMax = curr;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            vec4 s = texture(u_currentInject, uvw + vec3(float(dx) * texel.x, float(dy) * texel.y, 0.0));
+            nMin = min(nMin, s);
+            nMax = max(nMax, s);
+        }
+    }
+
+    vec4 prev = texture(u_prevHistory, vec3(prevUV, prevSlice));
+    prev = clamp(prev, nMin, nMax);
+
+    vec4 result = mix(curr, prev, blend);
+    imageStore(u_currHistory, ivec3(gid), result);
+}

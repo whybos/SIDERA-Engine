@@ -39,6 +39,7 @@
 #include "renderer/lighting/GBuffer.h"
 #include "renderer/lighting/TiledLightCuller.h"
 #include "renderer/postprocess/PostProcessPipeline.h"
+#include "renderer/volumetric/VolumetricPipeline.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -313,6 +314,10 @@ public:
     // Advanced Post Processing (Milestone 29)
     [[nodiscard]] PostProcessPipeline* getPostProcessPipeline() noexcept { return m_postProcessPipeline.get(); }
     [[nodiscard]] const PostProcessPipeline* getPostProcessPipeline() const noexcept { return m_postProcessPipeline.get(); }
+
+    // Volumetric Rendering (Milestone 30)
+    [[nodiscard]] VolumetricPipeline* getVolumetricPipeline() noexcept { return m_volumetricPipeline.get(); }
+    [[nodiscard]] const VolumetricPipeline* getVolumetricPipeline() const noexcept { return m_volumetricPipeline.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -496,6 +501,7 @@ private:
     std::unique_ptr<GBuffer> m_gbuffer;
     std::unique_ptr<TiledLightCuller> m_tiledLightCuller;
     std::unique_ptr<PostProcessPipeline> m_postProcessPipeline;
+    std::unique_ptr<VolumetricPipeline> m_volumetricPipeline;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

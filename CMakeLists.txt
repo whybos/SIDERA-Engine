@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.29.0
+    VERSION 0.30.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -144,6 +144,10 @@ set(SIDERA_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_bloom.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_ssao.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/post_tonemap.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_inject.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_temporal.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_integrate.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volumetric_composite.comp
 )
 
 set(SIDERA_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -341,6 +345,9 @@ set(SIDERA_SOURCES
     src/renderer/postprocess/PostProcessSettings.h
     src/renderer/postprocess/PostProcessPipeline.h
     src/renderer/postprocess/PostProcessPipeline.cpp
+    src/renderer/volumetric/VolumetricSettings.h
+    src/renderer/volumetric/VolumetricPipeline.h
+    src/renderer/volumetric/VolumetricPipeline.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -793,6 +800,9 @@ add_executable(test_world_partition
     src/renderer/postprocess/PostProcessSettings.h
     src/renderer/postprocess/PostProcessPipeline.h
     src/renderer/postprocess/PostProcessPipeline.cpp
+    src/renderer/volumetric/VolumetricSettings.h
+    src/renderer/volumetric/VolumetricPipeline.h
+    src/renderer/volumetric/VolumetricPipeline.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1269,6 +1279,48 @@ else()
 endif()
 
 target_link_libraries(test_advanced_post_processing
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_volumetric_rendering (Milestone 30)
+# -----------------------------------------------------------------------------
+add_executable(test_volumetric_rendering
+    tests/test_volumetric_rendering.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanShader.cpp
+    src/renderer/postprocess/PostProcessPipeline.cpp
+    src/renderer/volumetric/VolumetricPipeline.cpp
+)
+
+target_include_directories(test_volumetric_rendering
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(test_volumetric_rendering
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_volumetric_rendering PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_volumetric_rendering PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_volumetric_rendering PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_volumetric_rendering
     PRIVATE
         Vulkan::Vulkan
         glfw

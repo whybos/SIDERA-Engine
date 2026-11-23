@@ -1,0 +1,80 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D u_hdrScene;
+layout(set = 0, binding = 1) uniform sampler2D u_depthTex;
+layout(set = 0, binding = 2) uniform sampler3D u_volumeIntegrated;
+layout(set = 0, binding = 3) uniform sampler3D u_volumeHistory;
+
+layout(set = 0, binding = 4) uniform VolumetricUBO {
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    mat4 cascadeMatrices[4];
+    vec4 cascadeSplits;
+    vec4 cameraPosNear;
+    vec4 fogParams;
+    vec4 scatterParams;
+    vec4 fogColorMaxDist;
+    vec4 scatterColorFlags;
+    uvec4 gridCounts;
+    uvec4 extraCounts;
+    vec4 temporalParams;
+} u_ubo;
+
+float linearizeDepth(float depth, float nearP, float farP) {
+    return (nearP * farP) / max(farP - depth * (farP - nearP), 1e-4);
+}
+
+float depthToSliceNorm(float linearDepth, float nearP, float maxDist) {
+    float ratio = max(maxDist / max(nearP, 1e-4), 1.001);
+    return clamp(log(max(linearDepth, nearP) / max(nearP, 1e-4)) / log(ratio), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_hdrScene);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    float rawDepth = texture(u_depthTex, uv).r;
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float farP = max(u_ubo.temporalParams.y, nearP + 1.0);
+    float maxDist = max(u_ubo.fogColorMaxDist.w, nearP + 1.0);
+
+    float linearDepth = (rawDepth >= 0.9999) ? maxDist : min(linearizeDepth(rawDepth, nearP, farP), maxDist);
+    float sliceNorm = depthToSliceNorm(linearDepth, nearP, maxDist);
+
+    vec4 integrated = texture(u_volumeIntegrated, vec3(uv, sliceNorm));
+    vec3 scattering = integrated.rgb;
+    float transmittance = clamp(integrated.a, 0.0, 1.0);
+
+    vec4 sceneHDR = imageLoad(u_hdrScene, coord);
+    uint debugMode = u_ubo.extraCounts.y;
+
+    vec3 outColor;
+    if (debugMode == 0u) {
+        // Linear HDR composition: C_final = C_scene * T + L_scattering
+        outColor = sceneHDR.rgb * transmittance + scattering;
+    } else if (debugMode == 1u) {
+        // Density / Extinction visualization
+        vec4 hist = texture(u_volumeHistory, vec3(uv, sliceNorm));
+        outColor = vec3(hist.a * 10.0);
+    } else if (debugMode == 2u) {
+        // Integrated Scattering only
+        outColor = scattering;
+    } else if (debugMode == 3u) {
+        // Transmittance only
+        outColor = vec3(transmittance);
+    } else if (debugMode == 4u) {
+        // Temporal History in-scattering
+        vec4 hist = texture(u_volumeHistory, vec3(uv, sliceNorm));
+        outColor = hist.rgb;
+    } else {
+        outColor = sceneHDR.rgb * transmittance + scattering;
+    }
+
+    imageStore(u_hdrScene, coord, vec4(max(outColor, vec3(0.0)), sceneHDR.a));
+}

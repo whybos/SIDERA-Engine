@@ -1,0 +1,192 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+struct GPULight {
+    vec4 positionRadius; // xyz = world pos, w = radius
+    vec4 directionType;  // xyz = dir, w = LightType (0=Dir, 1=Point, 2=Spot)
+    vec4 colorIntensity; // rgb = color, a = intensity
+    vec4 spotParams;     // x = cosInner, y = cosOuter, z = enabled, w = shadowIdx
+};
+
+struct LocalFogVolume {
+    vec4 positionType;   // xyz = world center, w = 0 Sphere, 1 AABB
+    vec4 extentsDensity; // xyz = halfExtents (or radius in x), w = densityMultiplier
+    vec4 colorFalloff;   // rgb = scatteringColor, a = edgeFalloff
+    vec4 params;         // x = enabled, y = blendMode
+};
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image3D u_volumeInject;
+layout(std430, set = 0, binding = 1) readonly buffer LightBuffer {
+    GPULight lights[];
+} u_lights;
+layout(std430, set = 0, binding = 2) readonly buffer LocalVolumeBuffer {
+    LocalFogVolume volumes[];
+} u_volumes;
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow u_csmShadowMap;
+
+layout(set = 0, binding = 4) uniform VolumetricUBO {
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    mat4 cascadeMatrices[4];
+    vec4 cascadeSplits;
+    vec4 cameraPosNear;     // xyz = cameraPos, w = nearPlane
+    vec4 fogParams;         // x = baseDensity, y = fogHeight, z = heightFalloff, w = maxDensity
+    vec4 scatterParams;     // x = scatterCoeff, y = extinctionCoeff, z = anisotropy, w = scatterIntensity
+    vec4 fogColorMaxDist;   // rgb = fogColor, w = maxDistance
+    vec4 scatterColorFlags; // rgb = scatterColor, w = packed feature flags
+    uvec4 gridCounts;       // x = froxelX, y = froxelY, z = froxelZ, w = lightCount
+    uvec4 extraCounts;      // x = localVolumeCount, y = debugMode, z = historyValid, w = frameIndex
+    vec4 temporalParams;    // x = temporalBlend, y = farPlane, z = shadowBias, w = cascadeCount
+} u_ubo;
+
+const float PI = 3.14159265359;
+
+float evalHenyeyGreenstein(float cosTheta, float g) {
+    float g2 = g * g;
+    float denom = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4);
+    return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
+}
+
+float sliceToDepth(float sliceNorm, float nearP, float farP) {
+    return nearP * pow(farP / max(nearP, 1e-4), sliceNorm);
+}
+
+float sampleCSMShadow(vec3 worldPos, float linearDepth) {
+    uint cascadeCount = uint(max(u_ubo.temporalParams.w, 1.0));
+    uint cascadeIdx = cascadeCount - 1u;
+    for (uint i = 0u; i < cascadeCount && i < 4u; ++i) {
+        if (linearDepth <= u_ubo.cascadeSplits[i]) {
+            cascadeIdx = i;
+            break;
+        }
+    }
+    vec4 lsPos = u_ubo.cascadeMatrices[cascadeIdx] * vec4(worldPos, 1.0);
+    if (abs(lsPos.w) < 1e-5) return 1.0;
+    vec3 proj = lsPos.xyz / lsPos.w;
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z < 0.0 || proj.z > 1.0) {
+        return 1.0;
+    }
+    float bias = u_ubo.temporalParams.z;
+    return texture(u_csmShadowMap, vec4(uv, float(cascadeIdx), clamp(proj.z - bias, 0.0, 1.0)));
+}
+
+void main() {
+    uvec3 gid = gl_GlobalInvocationID;
+    if (gid.x >= u_ubo.gridCounts.x || gid.y >= u_ubo.gridCounts.y || gid.z >= u_ubo.gridCounts.z) {
+        return;
+    }
+
+    vec2 uv = (vec2(gid.xy) + 0.5) / vec2(u_ubo.gridCounts.xy);
+    float sliceNorm = (float(gid.z) + 0.5) / float(u_ubo.gridCounts.z);
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float maxDist = max(u_ubo.fogColorMaxDist.w, nearP + 1.0);
+    float linearDepth = sliceToDepth(sliceNorm, nearP, maxDist);
+
+    // Reconstruct world-space ray from NDC
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 farClip = u_ubo.invViewProj * vec4(ndc, 1.0, 1.0);
+    vec3 farWorld = farClip.xyz / max(farClip.w, 1e-5);
+    vec3 camPos = u_ubo.cameraPosNear.xyz;
+    vec3 viewDir = normalize(farWorld - camPos);
+    vec3 worldPos = camPos + viewDir * linearDepth;
+
+    // Height-based atmospheric density
+    float baseDensity = u_ubo.fogParams.x;
+    float fogHeight = u_ubo.fogParams.y;
+    float heightFalloff = u_ubo.fogParams.z;
+    float maxDensity = u_ubo.fogParams.w;
+
+    float heightDelta = max(worldPos.y - fogHeight, 0.0);
+    float density = baseDensity * exp(-heightFalloff * heightDelta);
+    vec3 localTint = u_ubo.scatterColorFlags.rgb;
+
+    // Local fog volumes (Sphere / AABB)
+    uint flags = uint(u_ubo.scatterColorFlags.w + 0.5);
+    bool enableLocal = (flags & 16u) != 0u;
+    if (enableLocal) {
+        uint volCount = u_ubo.extraCounts.x;
+        for (uint i = 0u; i < volCount; ++i) {
+            LocalFogVolume vol = u_volumes.volumes[i];
+            if (vol.params.x < 0.5) continue;
+            vec3 d = worldPos - vol.positionType.xyz;
+            float factor = 0.0;
+            if (vol.positionType.w < 0.5) {
+                float r = max(vol.extentsDensity.x, 1e-3);
+                float distNorm = length(d) / r;
+                if (distNorm < 1.0) {
+                    factor = pow(1.0 - distNorm, max(vol.colorFalloff.a, 0.5));
+                }
+            } else {
+                vec3 ext = max(vol.extentsDensity.xyz, vec3(1e-3));
+                vec3 q = abs(d) / ext;
+                float m = max(q.x, max(q.y, q.z));
+                if (m < 1.0) {
+                    factor = pow(1.0 - m, max(vol.colorFalloff.a, 0.5));
+                }
+            }
+            if (factor > 0.0) {
+                density += vol.extentsDensity.w * factor;
+                localTint = mix(localTint, vol.colorFalloff.rgb, clamp(factor, 0.0, 1.0));
+            }
+        }
+    }
+
+    density = clamp(density, 0.0, maxDensity);
+    float sigmaS = density * u_ubo.scatterParams.x;
+    float sigmaT = density * u_ubo.scatterParams.y;
+    float g = clamp(u_ubo.scatterParams.z, -0.95, 0.95);
+    float scatterIntensity = u_ubo.scatterParams.w;
+
+    bool enableDir    = (flags & 1u) != 0u;
+    bool enablePoint  = (flags & 2u) != 0u;
+    bool enableSpot   = (flags & 4u) != 0u;
+    bool enableShadow = (flags & 8u) != 0u;
+
+    // Ambient atmospheric in-scattering
+    vec3 inScattering = u_ubo.fogColorMaxDist.rgb * sigmaS * 0.15;
+
+    uint lightCount = u_ubo.gridCounts.w;
+    for (uint i = 0u; i < lightCount; ++i) {
+        GPULight L = u_lights.lights[i];
+        if (L.spotParams.z < 0.5) continue;
+        uint ltype = uint(L.directionType.w + 0.5);
+
+        if (ltype == 0u && enableDir) {
+            vec3 lightDir = normalize(-L.directionType.xyz);
+            float cosTheta = dot(viewDir, lightDir);
+            float phase = evalHenyeyGreenstein(cosTheta, g);
+            float shadow = enableShadow ? sampleCSMShadow(worldPos, linearDepth) : 1.0;
+            inScattering += L.colorIntensity.rgb * L.colorIntensity.a * phase * shadow * sigmaS * localTint * scatterIntensity;
+        } else if (ltype == 1u && enablePoint) {
+            vec3 toLight = L.positionRadius.xyz - worldPos;
+            float dist = length(toLight);
+            float radius = max(L.positionRadius.w, 0.01);
+            if (dist < radius) {
+                vec3 lightDir = toLight / max(dist, 1e-4);
+                float atten = 1.0 - (dist / radius);
+                atten = (atten * atten) / (1.0 + dist * dist * 0.25);
+                float phase = evalHenyeyGreenstein(dot(viewDir, lightDir), g * 0.5);
+                inScattering += L.colorIntensity.rgb * L.colorIntensity.a * atten * phase * sigmaS * localTint * scatterIntensity;
+            }
+        } else if (ltype == 2u && enableSpot) {
+            vec3 toLight = L.positionRadius.xyz - worldPos;
+            float dist = length(toLight);
+            float radius = max(L.positionRadius.w, 0.01);
+            if (dist < radius) {
+                vec3 lightDir = toLight / max(dist, 1e-4);
+                float cosAngle = dot(-lightDir, normalize(L.directionType.xyz));
+                float spotAtten = smoothstep(L.spotParams.y, L.spotParams.x, cosAngle);
+                if (spotAtten > 0.0) {
+                    float atten = 1.0 - (dist / radius);
+                    atten = (atten * atten * spotAtten) / (1.0 + dist * dist * 0.25);
+                    float phase = evalHenyeyGreenstein(dot(viewDir, lightDir), g * 0.65);
+                    inScattering += L.colorIntensity.rgb * L.colorIntensity.a * atten * phase * sigmaS * localTint * scatterIntensity;
+                }
+            }
+        }
+    }
+
+    imageStore(u_volumeInject, ivec3(gid), vec4(max(inScattering, vec3(0.0)), max(sigmaT, 0.0)));
+}

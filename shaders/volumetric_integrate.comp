@@ -1,0 +1,62 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler3D u_volumeHistory;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image3D u_volumeIntegrated;
+
+layout(set = 0, binding = 2) uniform VolumetricUBO {
+    mat4 invViewProj;
+    mat4 prevViewProj;
+    mat4 cascadeMatrices[4];
+    vec4 cascadeSplits;
+    vec4 cameraPosNear;
+    vec4 fogParams;
+    vec4 scatterParams;
+    vec4 fogColorMaxDist;
+    vec4 scatterColorFlags;
+    uvec4 gridCounts;
+    uvec4 extraCounts;
+    vec4 temporalParams;
+} u_ubo;
+
+float sliceToDepth(float sliceNorm, float nearP, float farP) {
+    return nearP * pow(farP / max(nearP, 1e-4), sliceNorm);
+}
+
+void main() {
+    uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= u_ubo.gridCounts.x || xy.y >= u_ubo.gridCounts.y) {
+        return;
+    }
+
+    uint sliceCount = u_ubo.gridCounts.z;
+    float nearP = max(u_ubo.cameraPosNear.w, 0.05);
+    float maxDist = max(u_ubo.fogColorMaxDist.w, nearP + 1.0);
+
+    vec3 accumScattering = vec3(0.0);
+    float accumTransmittance = 1.0;
+
+    for (uint z = 0u; z < sliceCount; ++z) {
+        float z0 = sliceToDepth(float(z) / float(sliceCount), nearP, maxDist);
+        float z1 = sliceToDepth(float(z + 1u) / float(sliceCount), nearP, maxDist);
+        float stepLen = max(z1 - z0, 1e-4);
+
+        vec4 sampleVal = texelFetch(u_volumeHistory, ivec3(xy, z), 0);
+        vec3 inScattering = max(sampleVal.rgb, vec3(0.0));
+        float extinction = max(sampleVal.a, 0.0);
+
+        // Beer-Lambert law: T(d) = exp(-sigma_t * d)
+        float sliceTransmittance = exp(-extinction * stepLen);
+
+        // Energy-conserving analytical integration over the slice
+        vec3 sliceScattering = (extinction > 1e-5)
+            ? inScattering * ((1.0 - sliceTransmittance) / extinction)
+            : inScattering * stepLen;
+
+        accumScattering += accumTransmittance * sliceScattering;
+        accumTransmittance *= sliceTransmittance;
+
+        imageStore(u_volumeIntegrated, ivec3(xy, z), vec4(accumScattering, accumTransmittance));
+    }
+}
