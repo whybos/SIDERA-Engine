@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.39.1
+    VERSION 0.39.2
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -1665,9 +1665,13 @@ if(SIDERA_BUILD_EDITOR)
         src/editor/EditorPanel.h
         src/editor/EditorApplication.h
         src/editor/EditorApplication.cpp
+        src/editor/content/SceneEditCommands.h
+        src/editor/content/ContentEditorPanels.h
         src/assets/AssetDatabase.cpp
         src/scene/Scene.cpp
         src/scene/SceneSerializer.cpp
+        src/physics/PhysicsWorld.cpp
+        src/audio/AudioSystem.cpp
     )
 
     target_include_directories(sidera_editor_core
@@ -1696,4 +1700,9 @@ if(SIDERA_BUILD_EDITOR)
         tests/test_editor_core.cpp
     )
     target_link_libraries(test_editor_core PRIVATE sidera_editor_core)
+
+    add_executable(test_editor_content
+        tests/test_editor_content.cpp
+    )
+    target_link_libraries(test_editor_content PRIVATE sidera_editor_core)
 endif()
