@@ -29,6 +29,15 @@ Application::Application(const ApplicationConfig& config)
     m_renderer.setFrustumCullingEnabled(m_config.frustumCulling);
     m_renderer.setOcclusionCullingEnabled(m_config.occlusionCulling);
     m_renderer.setTerrainEnabled(m_config.terrainEnabled);
+    if (m_renderer.getTerrain() && m_renderer.getTerrain()->getLODManager()) {
+        auto* tLod = m_renderer.getTerrain()->getLODManager();
+        tLod->applyQualityPreset(m_config.terrainQuality);
+        TerrainLODConfig cfg = tLod->getConfig();
+        cfg.strategy = m_config.terrainLodStrategy;
+        cfg.debugVisualization = m_config.terrainLodDebug;
+        cfg.debugOverlayMode = m_config.terrainLodDebug ? 1u : 0u;
+        tLod->setConfig(cfg);
+    }
     m_renderer.setLODEnabled(m_config.lodEnabled);
     m_renderer.setLODSelectionMode(m_config.lodMode);
     m_renderer.setForcedLOD(m_config.forceLod);
@@ -187,8 +196,24 @@ void Application::updateStatsTitle(const FrameStatsReport& r) {
     std::string terrainInfo;
     if (m_renderer.getTerrain() && m_renderer.isTerrainEnabled()) {
         const auto& tStats = m_renderer.getTerrain()->getStats();
-        terrainInfo = std::format(" | TERRAIN: {}/{} chunks, {} tris",
-                                  tStats.visibleChunks, tStats.totalChunks, tStats.visibleTriangles);
+        if (m_renderer.getTerrain()->isAdaptiveLODEnabled() && m_renderer.getTerrain()->getLODManager()) {
+            const auto& tl = m_renderer.getTerrain()->getLODManager()->getStats(0);
+            terrainInfo = std::format(
+                " | TERRAIN LOD: {}/{} patches, {} tris [L0:{} L1:{} L2:{} L3:{} Stitch:{} Err:{:.1f}px]",
+                tl.visibleTerrainPatches,
+                tl.activeLeafNodes,
+                tl.totalTerrainTriangles,
+                tl.patchCountPerLod[0],
+                tl.patchCountPerLod[1],
+                tl.patchCountPerLod[2],
+                tl.patchCountPerLod[3],
+                tl.stitchingPatchCount,
+                tl.maxScreenSpaceError
+            );
+        } else {
+            terrainInfo = std::format(" | TERRAIN: {}/{} chunks, {} tris",
+                                      tStats.visibleChunks, tStats.totalChunks, tStats.visibleTriangles);
+        }
     } else {
         terrainInfo = " | TERRAIN: OFF";
     }
@@ -306,6 +331,7 @@ void Application::run() {
     SIDERA_LOG_INFO("Core", "  [World Streaming]  F1 = Toggle World Streaming ON/OFF, U = Force Reload Streaming");
     SIDERA_LOG_INFO("Core", "  [World Partition]  G = Toggle World Partition Debug Grid (Green=Active, Cyan=Resident, Yellow=Loading, Orange=Unloading, Gray=Unloaded)");
     SIDERA_LOG_INFO("Core", "  [Terrain]          F2 = Toggle Terrain Rendering ON/OFF");
+    SIDERA_LOG_INFO("Core", "  [Terrain LOD]      N = Cycle Terrain LOD Debug | M = Toggle Screen-Space/Distance LOD");
     SIDERA_LOG_INFO("Core", "  [Diagnostics]      F3 = Diagnostics HUD Overlay (FPS, GPU/CPU Times, Viewport & Textures)");
     SIDERA_LOG_INFO("Core", "  [Performance]      F4 = 60 FPS Limiter, F5 = High-Poly Stress Test");
     SIDERA_LOG_INFO("Core", "  [Shadows]          F6 = Shadows ON/OFF, F7 = Shadow Debug Overlay");
@@ -358,6 +384,8 @@ void Application::run() {
     bool oWasDown = false;
     bool pWasDown = false;
     bool gWasDown = false;
+    bool nWasDown = false;
+    bool mWasDown = false;
 
     while (!m_window.shouldClose()) {
         const auto currentTime = std::chrono::steady_clock::now();
@@ -387,6 +415,8 @@ void Application::run() {
         const bool tDown = m_window.isKeyPressed(GLFW_KEY_T);
         const bool uDown = m_window.isKeyPressed(GLFW_KEY_U);
         const bool gDown = m_window.isKeyPressed(GLFW_KEY_G);
+        const bool nDown = m_window.isKeyPressed(GLFW_KEY_N);
+        const bool mDown = m_window.isKeyPressed(GLFW_KEY_M);
 
         if (f1Down && !f1WasDown) {
             m_renderer.toggleStreaming();
@@ -398,6 +428,18 @@ void Application::run() {
             m_frameStats.reset();
             SIDERA_LOG_INFO("Core", "World Partition Debug Grid toggled: {}.",
                             m_renderer.isPartitionDebugVisible() ? "ENABLED" : "DISABLED");
+        }
+        if (nDown && !nWasDown) {
+            if (m_renderer.getTerrain() && m_renderer.getTerrain()->getLODManager()) {
+                m_renderer.getTerrain()->getLODManager()->cycleDebugOverlayMode();
+            }
+            m_frameStats.reset();
+        }
+        if (mDown && !mWasDown) {
+            if (m_renderer.getTerrain() && m_renderer.getTerrain()->getLODManager()) {
+                m_renderer.getTerrain()->getLODManager()->toggleStrategy();
+            }
+            m_frameStats.reset();
         }
         if (uDown && !uWasDown) {
             m_renderer.forceReloadStreaming();
@@ -527,6 +569,8 @@ void Application::run() {
         tWasDown = tDown;
         uWasDown = uDown;
         gWasDown = gDown;
+        nWasDown = nDown;
+        mWasDown = mDown;
 
         m_renderer.getCamera().processInput(m_window, deltaTime);
         m_renderer.updateScene(deltaTime);

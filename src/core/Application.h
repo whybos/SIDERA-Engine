@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.22.0 - World Partition",
+        .title = "SIDERA Engine v0.23.0 - Advanced Terrain LOD",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -32,6 +32,9 @@ struct ApplicationConfig {
     bool partitionDebug = false;   // --partition-debug: enable World Partition debug visualization
     float partitionCellSize = 30.0f; // --partition-cell-size <val>
     bool terrainEnabled = true;    // --terrain / --no-terrain
+    bool terrainLodDebug = false;  // --terrain-lod-debug: enable Terrain Quadtree LOD debug visualization
+    TerrainLODStrategy terrainLodStrategy = TerrainLODStrategy::ScreenSpaceError; // --terrain-lod-strategy screen|distance
+    TerrainQualityPreset terrainQuality = TerrainQualityPreset::High;             // --terrain-quality low|medium|high|ultra
     std::string heightmapPath = ""; // --heightmap <path>
     bool lodEnabled = true;        // --lod / --no-lod
     LODSelectionMode lodMode = LODSelectionMode::Distance; // --lod-mode distance|screenspace

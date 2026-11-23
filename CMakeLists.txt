@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.22.0
+    VERSION 0.23.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -248,6 +248,9 @@ set(SIDERA_SOURCES
     src/terrain/TerrainMaterial.cpp
     src/terrain/Terrain.h
     src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
     src/terrain/TerrainRenderer.h
     src/terrain/TerrainRenderer.cpp
     src/lod/LODLevel.h
@@ -454,6 +457,9 @@ add_executable(test_foliage
     src/terrain/TerrainMaterial.cpp
     src/terrain/Terrain.h
     src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
     src/lod/LODLevel.h
     src/lod/LODConfig.h
     src/lod/LODStats.h
@@ -613,6 +619,9 @@ add_executable(test_world_streaming
     src/terrain/TerrainMaterial.cpp
     src/terrain/Terrain.h
     src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
     src/core/Window.h
     src/core/Window.cpp
     src/foliage/FoliageConfig.h
@@ -710,6 +719,9 @@ add_executable(test_world_partition
     src/streaming/WorldStreamingManager.cpp
     src/terrain/Terrain.h
     src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
     src/terrain/TerrainChunk.h
     src/terrain/TerrainChunk.cpp
     src/terrain/HeightmapData.h
@@ -771,6 +783,70 @@ else()
 endif()
 
 target_link_libraries(test_world_partition
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# -----------------------------------------------------------------------------
+# Test Target: test_terrain_lod (Milestone 23)
+# -----------------------------------------------------------------------------
+add_executable(test_terrain_lod
+    tests/test_terrain_lod.cpp
+    tests/stb_image_impl.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/InstanceBatch.cpp
+    src/renderer/Mesh.cpp
+    src/lod/MeshSimplifier.cpp
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.cpp
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/SamplerManager.cpp
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainChunk.cpp
+    src/terrain/TerrainMaterial.cpp
+    src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
+    src/foliage/FoliageSystem.cpp
+    src/foliage/FoliageBatch.cpp
+    src/streaming/StreamingRegion.cpp
+    src/streaming/StreamingUploadQueue.cpp
+    src/streaming/WorldStreamingManager.cpp
+    src/partition/WorldPartitionCell.cpp
+    src/partition/WorldPartition.cpp
+    src/partition/WorldPartitionManager.cpp
+)
+
+target_include_directories(test_terrain_lod
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_terrain_lod
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_terrain_lod PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_terrain_lod PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_terrain_lod PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_terrain_lod
     PRIVATE
         Vulkan::Vulkan
         glfw

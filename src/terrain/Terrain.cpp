@@ -17,8 +17,9 @@ struct TerrainPushConstants {
     glm::mat4 model{1.0f};
     glm::vec4 terrainParams{120.0f, 120.0f, 14.0f, 24.0f}; // x = width, y = length, z = heightScale, w = textureTiling
     glm::vec4 viewportParams{0.0f, 0.0f, 0.1f, 100.0f};     // x = mode, y = normalSpace, z = near, w = far
+    glm::vec4 lodParams{0.0f, 0.0f, 0.0f, 0.0f};            // x = morphFactor, y = lodLevel, z = debugOverlay, w = stitchMask
 };
-static_assert(sizeof(TerrainPushConstants) == 96, "TerrainPushConstants must be 96 bytes.");
+static_assert(sizeof(TerrainPushConstants) == 112, "TerrainPushConstants must be 112 bytes.");
 
 } // namespace
 
@@ -59,6 +60,11 @@ bool Terrain::init(const TerrainConfig& config,
 
     // 4. Calculate terrain aggregate bounding box
     computeBounds();
+
+    // 5. Initialize Quadtree Adaptive Terrain LOD (Milestone 23)
+    m_lodManager = std::make_unique<TerrainLODManager>();
+    TerrainLODConfig lodCfg = TerrainLODConfig::fromPreset(TerrainQualityPreset::High);
+    m_lodManager->init(m_config, lodCfg, m_heightmap, m_device, m_transferCommandPool);
 
     const auto endTime = std::chrono::high_resolution_clock::now();
     const float durationMs = std::chrono::duration<float, std::milli>(endTime - startTime).count();
@@ -106,6 +112,10 @@ void Terrain::rebuild(const TerrainConfig& newConfig) {
 }
 
 void Terrain::destroy() noexcept {
+    if (m_lodManager) {
+        m_lodManager->destroy();
+        m_lodManager.reset();
+    }
     m_chunks.clear();
     m_material.reset();
     m_initialized = false;
@@ -284,15 +294,52 @@ bool Terrain::containsWorldPoint(float worldX, float worldZ) const noexcept {
     return worldX >= -halfW && worldX <= halfW && worldZ >= -halfL && worldZ <= halfL;
 }
 
-uint32_t Terrain::render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, const glm::vec4& vpParams) const noexcept {
+void Terrain::beginLODFrame() noexcept {
+    if (m_lodManager && m_lodManager->isInitialized()) {
+        m_lodManager->beginFrame();
+    }
+}
+
+void Terrain::updateLOD(uint32_t viewportId,
+                        float deltaTime,
+                        const Camera& camera,
+                        uint32_t viewportHeight,
+                        bool frustumCull) {
+    if (m_adaptiveLodEnabled && m_lodManager && m_lodManager->isInitialized()) {
+        const auto& sel = m_lodManager->updateViewport(viewportId, deltaTime, camera, viewportHeight, frustumCull);
+        if (viewportId == 0u) {
+            m_stats.visibleChunks = sel.stats.visibleTerrainPatches;
+            m_stats.culledChunks = sel.stats.culledTerrainPatches;
+            m_stats.totalChunks = sel.stats.activeLeafNodes;
+            m_stats.visibleTriangles = sel.stats.totalTerrainTriangles;
+            m_stats.totalVertices = sel.stats.totalTerrainVertices;
+            m_stats.gpuMemoryUsageBytes = sel.stats.terrainGpuMemoryBytes;
+        }
+    }
+}
+
+void Terrain::updateShadowLOD(float deltaTime, const Camera& camera, uint32_t viewportHeight) {
+    if (m_adaptiveLodEnabled && m_lodManager && m_lodManager->isInitialized()) {
+        (void)m_lodManager->updateShadow(deltaTime, camera, viewportHeight);
+    }
+}
+
+uint32_t Terrain::render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, const glm::vec4& vpParams, uint32_t viewportId) const noexcept {
     if (!m_initialized) {
         return 0;
+    }
+
+    if (m_adaptiveLodEnabled && m_lodManager && m_lodManager->isInitialized()) {
+        const uint32_t drawCount = m_lodManager->renderViewport(cmd, pipelineLayout, viewportId, vpParams);
+        m_stats.mainDrawCalls = drawCount;
+        return drawCount;
     }
 
     const TerrainPushConstants pc{
         .model = glm::mat4(1.0f),
         .terrainParams = glm::vec4(m_config.width, m_config.length, m_config.heightScale, m_config.textureTiling),
-        .viewportParams = vpParams
+        .viewportParams = vpParams,
+        .lodParams = glm::vec4(0.0f)
     };
 
     vkCmdPushConstants(
@@ -322,6 +369,12 @@ uint32_t Terrain::render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, c
 uint32_t Terrain::renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const glm::mat4& lightSpaceMatrix) const noexcept {
     if (!m_initialized) {
         return 0;
+    }
+
+    if (m_adaptiveLodEnabled && m_lodManager && m_lodManager->isInitialized()) {
+        const uint32_t drawCount = m_lodManager->renderShadow(cmd, shadowLayout, lightSpaceMatrix);
+        m_stats.shadowDrawCalls = drawCount;
+        return drawCount;
     }
 
     uint32_t drawCount = 0;

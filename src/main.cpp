@@ -162,11 +162,26 @@ int main(int argc, char* argv[]) {
             config.partitionDebug = false;
         } else if (arg == "--partition-cell-size" && i + 1 < argc) {
             config.partitionCellSize = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--terrain-lod-debug") {
+            config.terrainLodDebug = true;
+        } else if (arg == "--no-terrain-lod-debug") {
+            config.terrainLodDebug = false;
+        } else if (arg == "--terrain-lod-strategy" && i + 1 < argc) {
+            const std::string_view strat(argv[++i]);
+            config.terrainLodStrategy = (strat == "distance" || strat == "dist")
+                ? sidera::TerrainLODStrategy::DistanceBased
+                : sidera::TerrainLODStrategy::ScreenSpaceError;
+        } else if (arg == "--terrain-quality" && i + 1 < argc) {
+            const std::string_view q(argv[++i]);
+            if (q == "low") config.terrainQuality = sidera::TerrainQualityPreset::Low;
+            else if (q == "medium") config.terrainQuality = sidera::TerrainQualityPreset::Medium;
+            else if (q == "ultra") config.terrainQuality = sidera::TerrainQualityPreset::Ultra;
+            else config.terrainQuality = sidera::TerrainQualityPreset::High;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.22.0 (Milestone 22: World Partition)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.23.0 (Milestone 23: Advanced Terrain LOD)...");
         {
             sidera::Application app(config);
             app.run();

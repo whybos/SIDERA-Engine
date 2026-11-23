@@ -362,9 +362,19 @@ void Renderer::updateScene(float deltaTime) noexcept {
         }
     }
 
-    // Update Terrain visibility via camera frustum culling (Milestone 18)
+    // Update Terrain Quadtree LOD & visibility (Milestone 18 & 23)
     if (m_terrain && m_terrainEnabled) {
-        if (m_frustumCullingEnabled) {
+        if (m_terrain->isAdaptiveLODEnabled()) {
+            m_terrain->beginLODFrame();
+            for (const auto& vp : m_viewportManager.getViewports()) {
+                const uint32_t vpH = std::max(1u, static_cast<uint32_t>(vp.vkViewport.height));
+                m_terrain->updateLOD(vp.id, deltaTime, m_camera, vpH, m_frustumCullingEnabled);
+            }
+            if (m_shadowsEnabled) {
+                const uint32_t mainH = std::max(1u, m_swapchain->getExtent().height);
+                m_terrain->updateShadowLOD(deltaTime, m_camera, mainH);
+            }
+        } else if (m_frustumCullingEnabled) {
             const glm::mat4 vp = m_camera.getProjectionMatrix() * m_camera.getViewMatrix();
             const Frustum camFrustum = Frustum::fromViewProj(vp);
             m_terrain->updateVisibility(camFrustum);
@@ -1789,6 +1799,11 @@ void Renderer::createSceneMeshes() {
         m_foliageSystem.get()
     );
 
+    if (m_terrain && m_terrain->getLODManager()) {
+        m_terrain->getLODManager()->setWorldPartitionManager(m_worldPartitionManager.get());
+        m_terrain->getLODManager()->setWorldStreamingManager(m_worldStreamingManager.get());
+    }
+
     // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
@@ -2739,6 +2754,53 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             for (const auto& box : boxes) {
                 const glm::vec3 center = box.bounds.getCenter();
                 const glm::vec3 size = glm::max(glm::vec3(0.5f), box.bounds.max - box.bounds.min);
+                const glm::mat4 model = glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
+
+                const MeshPushConstants pushData{
+                    .model = model,
+                    .albedoMetallic = box.color,
+                    .roughnessAoTex = glm::vec4(0.5f, 1.0f, 0.0f, 0.0f),
+                    .viewportParams = vpParams
+                };
+
+                vkCmdPushConstants(
+                    cmd,
+                    dbgLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    sizeof(MeshPushConstants),
+                    &pushData
+                );
+
+                m_cubeMesh->draw(cmd);
+                ++m_mainApiDrawCalls;
+            }
+        }
+        // -------------------------------------------------------------
+        // Draw Terrain Quadtree LOD Debug Visualization (Milestone 23)
+        // -------------------------------------------------------------
+        if (m_terrain && m_terrainEnabled && m_terrain->getLODManager() &&
+            m_terrain->getLODManager()->isDebugVisualizationEnabled() && m_cubeMesh) {
+            VkPipeline dbgPipeline = m_pipelineDebugWireframe ? m_pipelineDebugWireframe->getHandle() : m_pipeline->getHandle();
+            VkPipelineLayout dbgLayout = m_pipelineDebugWireframe ? m_pipelineDebugWireframe->getLayout() : m_pipeline->getLayout();
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dbgPipeline);
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                dbgLayout,
+                0,
+                1,
+                &m_cameraDescriptorSets[m_currentFrame],
+                0,
+                nullptr
+            );
+
+            m_cubeMesh->bind(cmd);
+
+            const auto lodBoxes = m_terrain->getLODManager()->getDebugBoxes(vp.id);
+            for (const auto& box : lodBoxes) {
+                const glm::vec3 center = box.bounds.getCenter();
+                const glm::vec3 size = glm::max(glm::vec3(0.25f), box.bounds.max - box.bounds.min);
                 const glm::mat4 model = glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), size);
 
                 const MeshPushConstants pushData{

@@ -5,6 +5,7 @@
 #include "terrain/TerrainBounds.h"
 #include "terrain/TerrainChunk.h"
 #include "terrain/TerrainConfig.h"
+#include "terrain/TerrainLODManager.h"
 #include "terrain/TerrainMaterial.h"
 
 #include <glm/mat4x4.hpp>
@@ -58,13 +59,26 @@ public:
     // Visibility determination via Frustum culling
     void updateVisibility(const Frustum& frustum) noexcept;
 
+    // Quadtree Adaptive Terrain LOD (Milestone 23)
+    void beginLODFrame() noexcept;
+    void updateLOD(uint32_t viewportId,
+                   float deltaTime,
+                   const Camera& camera,
+                   uint32_t viewportHeight,
+                   bool frustumCull = true);
+    void updateShadowLOD(float deltaTime, const Camera& camera, uint32_t viewportHeight);
+    [[nodiscard]] TerrainLODManager* getLODManager() noexcept { return m_lodManager.get(); }
+    [[nodiscard]] const TerrainLODManager* getLODManager() const noexcept { return m_lodManager.get(); }
+    [[nodiscard]] bool isAdaptiveLODEnabled() const noexcept { return m_adaptiveLodEnabled && m_lodManager && m_lodManager->isInitialized(); }
+    void setAdaptiveLODEnabled(bool enabled) noexcept { m_adaptiveLodEnabled = enabled; }
+
     // World-space height and surface normal queries
     [[nodiscard]] float getHeightAt(float worldX, float worldZ, bool* outOfBounds = nullptr) const noexcept;
     [[nodiscard]] glm::vec3 getNormalAt(float worldX, float worldZ) const noexcept;
     [[nodiscard]] bool containsWorldPoint(float worldX, float worldZ) const noexcept;
 
     // Drawing
-    uint32_t render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, const glm::vec4& vpParams) const noexcept;
+    uint32_t render(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout, const glm::vec4& vpParams, uint32_t viewportId = 0) const noexcept;
     uint32_t renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const glm::mat4& lightSpaceMatrix) const noexcept;
 
     // Dynamic Chunk Management for World Streaming
@@ -97,6 +111,8 @@ private:
     TerrainBounds m_bounds{};
     std::unique_ptr<TerrainMaterial> m_material;
     std::vector<std::unique_ptr<TerrainChunk>> m_chunks;
+    std::unique_ptr<TerrainLODManager> m_lodManager;
+    bool m_adaptiveLodEnabled = true;
     mutable TerrainStats m_stats{};
     bool m_initialized = false;
 };

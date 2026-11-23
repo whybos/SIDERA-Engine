@@ -20,10 +20,11 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 terrainParams;    // x = width, y = length, z = heightScale, w = textureTiling
     vec4 viewportParams;   // x = viewportMode, y = normalSpace, z = nearPlane, w = farPlane
+    vec4 lodParams;        // x = morphFactor, y = lodLevel, z = debugOverlayMode, w = stitchMask
 } pc;
 
 layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inColor;
+layout(location = 1) in vec3 inColor;   // x = parentWorldY (geomorphing), y = lodLevel, z = morphMask
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec3 inNormal;
 
@@ -34,7 +35,12 @@ layout(location = 3) out vec2 fragUV;
 layout(location = 4) out vec2 fragTerrainUV;
 
 void main() {
-    vec4 world = pc.model * vec4(inPosition, 1.0);
+    // GPU Geomorphing: smoothly interpolate odd vertices toward parent surface height
+    float morphFactor = clamp(pc.lodParams.x, 0.0, 1.0);
+    vec3 morphedPos = inPosition;
+    morphedPos.y = mix(inPosition.y, inColor.x, morphFactor * inColor.z);
+
+    vec4 world = pc.model * vec4(morphedPos, 1.0);
     fragWorldPos = world.xyz;
     // Inverse-transpose normal transformation
     fragNormal = normalize(transpose(inverse(mat3(pc.model))) * inNormal);

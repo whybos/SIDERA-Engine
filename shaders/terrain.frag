@@ -20,6 +20,7 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 terrainParams;    // x = width, y = length, z = heightScale, w = textureTiling
     vec4 viewportParams;   // x = viewportMode, y = normalSpace (0=world, 1=view), z = nearPlane, w = farPlane
+    vec4 lodParams;        // x = morphFactor, y = lodLevel, z = debugOverlayMode, w = stitchMask
 } pc;
 
 // Universal Scene Environment & Shadow Bindings (Set 0)
@@ -407,6 +408,29 @@ void main() {
     if (shadowDbg == 4) {
         outColor = vec4(vec3(shadowFactor), 1.0);
         return;
+    }
+
+    // Terrain LOD Debug Overlay (Milestone 23)
+    uint lodDebugMode = uint(pc.lodParams.z + 0.5);
+    if (lodDebugMode == 1u) {
+        // LOD Level color coding: LOD 0 = Red, LOD 1 = Orange, LOD 2 = Yellow, LOD 3 = Green, LOD 4+ = Blue
+        const vec3 lodColors[5] = vec3[5](
+            vec3(0.95, 0.20, 0.20),
+            vec3(1.00, 0.55, 0.10),
+            vec3(0.95, 0.90, 0.15),
+            vec3(0.20, 0.85, 0.30),
+            vec3(0.20, 0.55, 0.98)
+        );
+        int lodIdx = clamp(int(pc.lodParams.y + 0.5), 0, 4);
+        color = mix(color, lodColors[lodIdx], 0.55);
+    } else if (lodDebugMode == 2u) {
+        // Geomorphing factor heatmap (blue = 0, red = 1)
+        float m = clamp(pc.lodParams.x, 0.0, 1.0);
+        color = mix(color, mix(vec3(0.1, 0.3, 0.9), vec3(1.0, 0.15, 0.1), m), 0.6);
+    } else if (lodDebugMode == 3u) {
+        // Stitching patch highlight (magenta = stitched, green = unstitched)
+        bool stitched = pc.lodParams.w > 0.5;
+        color = mix(color, stitched ? vec3(0.95, 0.2, 0.9) : vec3(0.2, 0.85, 0.3), 0.5);
     }
 
     outColor = vec4(color, 1.0);
