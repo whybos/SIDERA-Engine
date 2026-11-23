@@ -193,7 +193,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.24.0 (Milestone 24: Procedural World Generation)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.25.0 (Milestone 25: Vegetation Distribution)...");
         {
             sidera::Application app(config);
             app.run();

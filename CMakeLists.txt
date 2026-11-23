@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.24.0
+    VERSION 0.25.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -307,6 +307,13 @@ set(SIDERA_SOURCES
     src/worldgen/WorldRegionGenerator.cpp
     src/worldgen/WorldGenerator.h
     src/worldgen/WorldGenerator.cpp
+    src/vegetation/VegetationSpecies.h
+    src/vegetation/VegetationExclusionZone.h
+    src/vegetation/VegetationDensityMap.h
+    src/vegetation/VegetationDensityMap.cpp
+    src/vegetation/VegetationTypes.h
+    src/vegetation/VegetationDistributionManager.h
+    src/vegetation/VegetationDistributionManager.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -733,6 +740,13 @@ add_executable(test_world_partition
     src/worldgen/WorldRegionGenerator.cpp
     src/worldgen/WorldGenerator.h
     src/worldgen/WorldGenerator.cpp
+    src/vegetation/VegetationSpecies.h
+    src/vegetation/VegetationExclusionZone.h
+    src/vegetation/VegetationDensityMap.h
+    src/vegetation/VegetationDensityMap.cpp
+    src/vegetation/VegetationTypes.h
+    src/vegetation/VegetationDistributionManager.h
+    src/vegetation/VegetationDistributionManager.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -942,6 +956,77 @@ else()
 endif()
 
 target_link_libraries(test_world_generation
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# -----------------------------------------------------------------------------
+# Test Target: test_vegetation_distribution (Milestone 25)
+# -----------------------------------------------------------------------------
+add_executable(test_vegetation_distribution
+    tests/test_vegetation_distribution.cpp
+    tests/stb_image_impl.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/InstanceBatch.cpp
+    src/renderer/Mesh.cpp
+    src/lod/MeshSimplifier.cpp
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.cpp
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/SamplerManager.cpp
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainChunk.cpp
+    src/terrain/TerrainMaterial.cpp
+    src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
+    src/foliage/FoliageSystem.cpp
+    src/foliage/FoliageBatch.cpp
+    src/streaming/StreamingRegion.cpp
+    src/streaming/StreamingUploadQueue.cpp
+    src/streaming/WorldStreamingManager.cpp
+    src/partition/WorldPartitionCell.cpp
+    src/partition/WorldPartition.cpp
+    src/partition/WorldPartitionManager.cpp
+    src/worldgen/WorldNoise.cpp
+    src/worldgen/BiomeGenerator.cpp
+    src/worldgen/TerrainGenerationPipeline.cpp
+    src/worldgen/WorldRegionGenerator.cpp
+    src/worldgen/WorldGenerator.cpp
+    src/vegetation/VegetationDensityMap.cpp
+    src/vegetation/VegetationDistributionManager.cpp
+)
+
+target_include_directories(test_vegetation_distribution
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_vegetation_distribution
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_vegetation_distribution PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_vegetation_distribution PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_vegetation_distribution PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_vegetation_distribution
     PRIVATE
         Vulkan::Vulkan
         glfw

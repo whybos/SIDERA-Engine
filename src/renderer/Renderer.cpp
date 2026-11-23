@@ -1821,6 +1821,24 @@ void Renderer::createSceneMeshes() {
     }
 
     // -----------------------------------------------------------------
+    // VEGETATION DISTRIBUTION SYSTEM (Milestone 25)
+    // -----------------------------------------------------------------
+    if (m_worldGenerator && m_terrain && m_foliageSystem) {
+        m_vegetationManager = std::make_unique<VegetationDistributionManager>();
+        VegetationDistributionConfig vegCfg{};
+        vegCfg.worldSeed = m_worldGenerator->getConfig().seed;
+        vegCfg.densityMultiplier = 1.0f;
+        vegCfg.regionSize = 30.0f;
+        vegCfg.partitionCellSize = partConfig.cellSize;
+        vegCfg.maxInstancesPerRegion = 200;
+        m_vegetationManager->init(vegCfg, m_worldGenerator.get(), m_terrain.get());
+        m_vegetationManager->setWorldPartitionManager(m_worldPartitionManager.get());
+        m_vegetationManager->setWorldStreamingManager(m_worldStreamingManager.get());
+        const uint64_t vegCount = m_vegetationManager->distributeWorld(-2, 1, -2, 1, m_foliageSystem.get());
+        SIDERA_LOG_INFO("Vegetation", "Distributed {} procedural biome-aware vegetation instances into FoliageSystem.", vegCount);
+    }
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
