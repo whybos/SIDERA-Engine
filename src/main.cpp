@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.38.0 (Milestone 38: Advanced Audio System)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.40.0 (Milestone 40: Engine Stability & Runtime Systems)...");
         {
             sidera::Application app(config);
             app.run();

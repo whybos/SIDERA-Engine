@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.39.2
+    VERSION 0.40.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -1706,3 +1706,28 @@ if(SIDERA_BUILD_EDITOR)
     )
     target_link_libraries(test_editor_content PRIVATE sidera_editor_core)
 endif()
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_runtime_systems (Milestone 40)
+# -----------------------------------------------------------------------------
+add_executable(test_runtime_systems
+    tests/test_runtime_systems.cpp
+)
+
+target_include_directories(test_runtime_systems
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(MSVC)
+    target_compile_options(test_runtime_systems PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_runtime_systems PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_runtime_systems PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_runtime_systems
+    PRIVATE
+        glm::glm
+)
