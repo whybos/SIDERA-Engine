@@ -1858,6 +1858,21 @@ void Renderer::createSceneMeshes() {
     }
 
     // -----------------------------------------------------------------
+    // VIRTUAL TEXTURING SYSTEM (Milestone 27)
+    // -----------------------------------------------------------------
+    m_virtualTextureSystem = std::make_unique<VirtualTextureSystem>();
+    VirtualTextureConfig vtCfg{};
+    vtCfg.virtualWidth = 16384;
+    vtCfg.virtualHeight = 16384;
+    vtCfg.pageSize = 128;
+    vtCfg.gutterSize = 4;
+    vtCfg.physicalCacheCapacity = 256;
+    vtCfg.maxUploadsPerFrame = 8;
+    m_virtualTextureSystem->init(vtCfg, &dev, pool);
+    m_virtualTextureSystem->createVirtualTexture("Terrain_Albedo_VT", 16384, 16384, VirtualTextureSemantic::AlbedoSRGB);
+    m_virtualTextureSystem->createVirtualTexture("Terrain_Normal_VT", 16384, 16384, VirtualTextureSemantic::NormalLinear);
+
+    // -----------------------------------------------------------------
     // SCENE OBJECT PLACEMENT & PBR MATERIAL ASSIGNMENT (Milestone 19 LOD Demo)
     // -----------------------------------------------------------------
     // 1. Ground platform (textured dielectric, high roughness)
@@ -2387,6 +2402,7 @@ void Renderer::createSceneMeshes() {
 }
 
 void Renderer::destroySceneMeshes() noexcept {
+    m_virtualTextureSystem.reset();
     m_gpuVegetationSystem.reset();
     m_vegetationManager.reset();
     m_worldGenerator.reset();
@@ -2599,6 +2615,12 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     if (m_gpuVegetationSystem && m_gpuVegetationSystem->isGpuActive()) {
         m_gpuVegetationSystem->beginFrame();
         m_gpuVegetationSystem->recordCullAndCompact(cmd, m_currentFrame, m_camera, false);
+    }
+
+    // 1.6 Virtual Texture GPU Feedback Pass (Milestone 27)
+    if (m_virtualTextureSystem && m_virtualTextureSystem->isGpuActive()) {
+        m_virtualTextureSystem->beginFrame();
+        m_virtualTextureSystem->recordFeedbackPass(cmd, m_currentFrame, m_camera, 120.0f);
     }
 
     // Timestamp 1: end of command generation

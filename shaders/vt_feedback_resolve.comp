@@ -1,0 +1,78 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct PageTableEntry {
+    uint physicalPageIndex;
+    uint residentAndMip;       // bit 0 = resident, bits 8..15 = mip, bits 16..31 = version
+    uint fallbackPhysicalIndex;
+    uint fallbackMip;
+};
+
+struct FeedbackRequest {
+    uint textureId;
+    uint pageX;
+    uint pageY;
+    uint mipLevel;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer PageTableBuffer {
+    PageTableEntry pageTable[];
+};
+
+layout(std430, set = 0, binding = 1) buffer FeedbackBuffer {
+    uint requestCount;
+    uint overflowCount;
+    uint hitCount;
+    uint missCount;
+    FeedbackRequest requests[];
+} feedback;
+
+layout(push_constant) uniform VTFeedbackPC {
+    vec4 cameraPosFootprint; // xyz = cameraPos, w = worldSize
+    uvec4 gridParams;        // x = sampleCount, y = textureId, z = pagesPerAxisMip0, w = maxFeedbackCap
+    uvec4 mipParams;         // x = maxMipLevels, y = pageSize, z = gutterSize, w = frameIndex
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= pc.gridParams.x) {
+        return;
+    }
+
+    // Generate deterministic screen/world-space sample UV around camera footprint
+    uint dim = max(1u, uint(sqrt(float(pc.gridParams.x))));
+    uint sx = gid % dim;
+    uint sy = gid / dim;
+    vec2 uv = clamp((vec2(sx, sy) + 0.5) / float(dim), 0.0, 0.9999);
+
+    // Compute distance-based virtual mip level
+    vec2 worldXZ = (uv - 0.5) * pc.cameraPosFootprint.w;
+    float dist = distance(pc.cameraPosFootprint.xz, worldXZ);
+    uint maxMip = max(1u, pc.mipParams.x) - 1u;
+    uint mip = clamp(uint(log2(max(dist * 0.12, 1.0))), 0u, maxMip);
+
+    uint pagesAxis = max(1u, pc.gridParams.z >> mip);
+    uint px = min(uint(uv.x * float(pagesAxis)), pagesAxis - 1u);
+    uint py = min(uint(uv.y * float(pagesAxis)), pagesAxis - 1u);
+
+    // Bounded page table lookup with parent-mip fallback
+    uint linearIdx = (py * pagesAxis + px) % max(1u, pc.gridParams.z * pc.gridParams.z);
+    PageTableEntry entry = pageTable[linearIdx];
+    bool isResident = (entry.residentAndMip & 1u) != 0u;
+
+    if (isResident) {
+        atomicAdd(feedback.hitCount, 1u);
+    } else {
+        atomicAdd(feedback.missCount, 1u);
+        uint slot = atomicAdd(feedback.requestCount, 1u);
+        if (slot < pc.gridParams.w) {
+            feedback.requests[slot].textureId = pc.gridParams.y;
+            feedback.requests[slot].pageX = px;
+            feedback.requests[slot].pageY = py;
+            feedback.requests[slot].mipLevel = mip;
+        } else {
+            atomicAdd(feedback.overflowCount, 1u);
+        }
+    }
+}
