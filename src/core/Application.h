@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.36.0 - Scene Serialization & Prefab System",
+        .title = "SIDERA Engine v0.37.0 - Physics, Character Controller & Interaction",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};

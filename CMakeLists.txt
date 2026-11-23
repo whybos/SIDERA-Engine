@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.36.0
+    VERSION 0.37.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -377,6 +377,9 @@ set(SIDERA_SOURCES
     src/scene/Scene.cpp
     src/scene/SceneSerializer.h
     src/scene/SceneSerializer.cpp
+    src/physics/PhysicsTypes.h
+    src/physics/PhysicsWorld.h
+    src/physics/PhysicsWorld.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -853,6 +856,9 @@ add_executable(test_world_partition
     src/scene/Scene.cpp
     src/scene/SceneSerializer.h
     src/scene/SceneSerializer.cpp
+    src/physics/PhysicsTypes.h
+    src/physics/PhysicsWorld.h
+    src/physics/PhysicsWorld.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -1582,6 +1588,32 @@ else()
 endif()
 
 target_link_libraries(test_scene_serialization
+    PRIVATE
+        glm::glm
+)
+
+
+# -----------------------------------------------------------------------------
+# Test Target: test_physics_integration (Milestone 37)
+# -----------------------------------------------------------------------------
+add_executable(test_physics_integration
+    tests/test_physics_integration.cpp
+    src/physics/PhysicsWorld.cpp
+)
+
+target_include_directories(test_physics_integration
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(MSVC)
+    target_compile_options(test_physics_integration PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_physics_integration PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_physics_integration PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_physics_integration
     PRIVATE
         glm::glm
 )
