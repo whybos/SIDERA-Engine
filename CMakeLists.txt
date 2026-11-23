@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.40.0
+    VERSION 0.41.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -1731,3 +1731,33 @@ target_link_libraries(test_runtime_systems
     PRIVATE
         glm::glm
 )
+
+# -----------------------------------------------------------------------------
+# Reusable Game Frameworks (Milestone 41) — Optional Layer on Top of Engine Core
+# -----------------------------------------------------------------------------
+option(SIDERA_BUILD_FRAMEWORKS "Build reusable SIDERA gameplay frameworks" ON)
+
+if(SIDERA_BUILD_FRAMEWORKS)
+    add_library(sidera_framework INTERFACE)
+    target_include_directories(sidera_framework
+        INTERFACE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(sidera_framework
+        INTERFACE
+            glm::glm
+    )
+
+    add_executable(test_rpg_framework
+        tests/test_rpg_framework.cpp
+        src/physics/PhysicsWorld.cpp
+    )
+    target_link_libraries(test_rpg_framework PRIVATE sidera_framework)
+
+    if(MSVC)
+        target_compile_options(test_rpg_framework PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+        target_compile_definitions(test_rpg_framework PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(test_rpg_framework PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
