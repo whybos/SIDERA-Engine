@@ -177,11 +177,23 @@ int main(int argc, char* argv[]) {
             else if (q == "medium") config.terrainQuality = sidera::TerrainQualityPreset::Medium;
             else if (q == "ultra") config.terrainQuality = sidera::TerrainQualityPreset::Ultra;
             else config.terrainQuality = sidera::TerrainQualityPreset::High;
+        } else if (arg == "--world-seed" && i + 1 < argc) {
+            config.worldSeed = std::strtoull(argv[++i], nullptr, 10);
+        } else if (arg == "--world-scale" && i + 1 < argc) {
+            config.worldScale = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--world-preset" && i + 1 < argc) {
+            const std::string_view wp(argv[++i]);
+            if (wp == "continental") config.worldPreset = sidera::WorldPreset::Continental;
+            else if (wp == "mountainous") config.worldPreset = sidera::WorldPreset::Mountainous;
+            else if (wp == "archipelago") config.worldPreset = sidera::WorldPreset::Archipelago;
+            else if (wp == "desert") config.worldPreset = sidera::WorldPreset::DesertWorld;
+            else if (wp == "alpine") config.worldPreset = sidera::WorldPreset::AlpineWorld;
+            else config.worldPreset = sidera::WorldPreset::Balanced;
         }
     }
 
     try {
-        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.23.0 (Milestone 23: Advanced Terrain LOD)...");
+        SIDERA_LOG_INFO("Core", "Starting SIDERA Engine v0.24.0 (Milestone 24: Procedural World Generation)...");
         {
             sidera::Application app(config);
             app.run();

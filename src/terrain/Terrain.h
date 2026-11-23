@@ -51,7 +51,8 @@ public:
     bool init(const TerrainConfig& config,
               const VulkanDevice& device,
               VkCommandPool transferCommandPool,
-              TextureManager& textureManager);
+              TextureManager& textureManager,
+              const HeightmapData* externalHeightmap = nullptr);
     bool initHeadless(const TerrainConfig& config);
     void rebuild(const TerrainConfig& newConfig);
     void destroy() noexcept;

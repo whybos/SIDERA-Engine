@@ -1728,7 +1728,19 @@ void Renderer::createSceneMeshes() {
     SIDERA_LOG_INFO("Renderer", "[StressTest] New meshes created (mode: {}).", m_stressTestMode ? "STRESS TEST" : "NORMAL");
 
     // -----------------------------------------------------------------
-    // TERRAIN RENDERING SYSTEM (Milestone 18)
+    // PROCEDURAL WORLD GENERATION (Milestone 24)
+    // -----------------------------------------------------------------
+    WorldGenerationConfig worldGenCfg = WorldGenerationConfig::fromPreset(WorldPreset::Balanced, 424242ULL);
+    worldGenCfg.worldWidth = 120.0f;
+    worldGenCfg.worldLength = 120.0f;
+    worldGenCfg.maxElevation = 14.0f;
+    worldGenCfg.heightOffset = -2.2f;
+    worldGenCfg.heightmapResolution = 513;
+    m_worldGenerator = std::make_unique<WorldGenerator>(worldGenCfg);
+    m_worldGenerator->generateWorld();
+
+    // -----------------------------------------------------------------
+    // TERRAIN RENDERING SYSTEM (Milestone 18 & 23)
     // -----------------------------------------------------------------
     m_terrain = std::make_unique<Terrain>();
     TerrainConfig terrainConfig;
@@ -1740,7 +1752,7 @@ void Renderer::createSceneMeshes() {
     terrainConfig.chunksZ = 4;
     terrainConfig.chunkResolution = 48;
     terrainConfig.textureTiling = 24.0f;
-    m_terrain->init(terrainConfig, dev, pool, *m_textureManager);
+    m_terrain->init(terrainConfig, dev, pool, *m_textureManager, &m_worldGenerator->getGlobalHeightmap());
 
     m_terrainRenderer = std::make_unique<TerrainRenderer>(
         dev,
@@ -1802,6 +1814,10 @@ void Renderer::createSceneMeshes() {
     if (m_terrain && m_terrain->getLODManager()) {
         m_terrain->getLODManager()->setWorldPartitionManager(m_worldPartitionManager.get());
         m_terrain->getLODManager()->setWorldStreamingManager(m_worldStreamingManager.get());
+    }
+    if (m_worldGenerator) {
+        m_worldGenerator->setWorldPartitionManager(m_worldPartitionManager.get());
+        m_worldGenerator->setWorldStreamingManager(m_worldStreamingManager.get());
     }
 
     // -----------------------------------------------------------------

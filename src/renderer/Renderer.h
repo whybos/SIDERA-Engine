@@ -30,6 +30,7 @@
 #include "foliage/FoliageRenderer.h"
 #include "streaming/WorldStreamingManager.h"
 #include "partition/WorldPartitionManager.h"
+#include "worldgen/WorldGenerator.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -274,6 +275,10 @@ public:
     // World Partition System (Milestone 22)
     [[nodiscard]] WorldPartitionManager* getWorldPartitionManager() noexcept { return m_worldPartitionManager.get(); }
     [[nodiscard]] const WorldPartitionManager* getWorldPartitionManager() const noexcept { return m_worldPartitionManager.get(); }
+
+    // Procedural World Generation (Milestone 24)
+    [[nodiscard]] WorldGenerator* getWorldGenerator() noexcept { return m_worldGenerator.get(); }
+    [[nodiscard]] const WorldGenerator* getWorldGenerator() const noexcept { return m_worldGenerator.get(); }
     [[nodiscard]] const WorldPartitionStats& getPartitionStats() const noexcept;
     [[nodiscard]] bool isPartitionDebugVisible() const noexcept { return m_partitionDebugVisible; }
     void setPartitionDebugVisible(bool visible) noexcept { m_partitionDebugVisible = visible; }
@@ -448,6 +453,7 @@ private:
 
     // World Partition System (Milestone 22)
     std::unique_ptr<WorldPartitionManager> m_worldPartitionManager;
+    std::unique_ptr<WorldGenerator> m_worldGenerator;
     bool m_partitionDebugVisible = false;
 
     std::array<VkCommandPool, kMaxFramesInFlight> m_commandPools{};

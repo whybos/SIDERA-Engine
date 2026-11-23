@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SIDERA
-    VERSION 0.23.0
+    VERSION 0.24.0
     DESCRIPTION "SIDERA Engine - High-Performance Vulkan Game Engine"
     LANGUAGES CXX C
 )
@@ -294,6 +294,19 @@ set(SIDERA_SOURCES
     src/partition/WorldPartition.cpp
     src/partition/WorldPartitionManager.h
     src/partition/WorldPartitionManager.cpp
+    src/worldgen/WorldSeed.h
+    src/worldgen/WorldGenerationConfig.h
+    src/worldgen/WorldGenerationStatistics.h
+    src/worldgen/WorldNoise.h
+    src/worldgen/WorldNoise.cpp
+    src/worldgen/BiomeGenerator.h
+    src/worldgen/BiomeGenerator.cpp
+    src/worldgen/TerrainGenerationPipeline.h
+    src/worldgen/TerrainGenerationPipeline.cpp
+    src/worldgen/WorldRegionGenerator.h
+    src/worldgen/WorldRegionGenerator.cpp
+    src/worldgen/WorldGenerator.h
+    src/worldgen/WorldGenerator.cpp
 )
 
 add_executable(sidera ${SIDERA_SOURCES})
@@ -707,6 +720,19 @@ add_executable(test_world_partition
     src/partition/WorldPartition.cpp
     src/partition/WorldPartitionManager.h
     src/partition/WorldPartitionManager.cpp
+    src/worldgen/WorldSeed.h
+    src/worldgen/WorldGenerationConfig.h
+    src/worldgen/WorldGenerationStatistics.h
+    src/worldgen/WorldNoise.h
+    src/worldgen/WorldNoise.cpp
+    src/worldgen/BiomeGenerator.h
+    src/worldgen/BiomeGenerator.cpp
+    src/worldgen/TerrainGenerationPipeline.h
+    src/worldgen/TerrainGenerationPipeline.cpp
+    src/worldgen/WorldRegionGenerator.h
+    src/worldgen/WorldRegionGenerator.cpp
+    src/worldgen/WorldGenerator.h
+    src/worldgen/WorldGenerator.cpp
     src/streaming/StreamingState.h
     src/streaming/StreamingConfig.h
     src/streaming/StreamingStats.h
@@ -847,6 +873,75 @@ else()
 endif()
 
 target_link_libraries(test_terrain_lod
+    PRIVATE
+        Vulkan::Vulkan
+        glfw
+        glm::glm
+)
+
+# -----------------------------------------------------------------------------
+# Test Target: test_world_generation (Milestone 24)
+# -----------------------------------------------------------------------------
+add_executable(test_world_generation
+    tests/test_world_generation.cpp
+    tests/stb_image_impl.cpp
+    src/core/Log.cpp
+    src/core/Window.cpp
+    src/renderer/Camera.cpp
+    src/renderer/InstanceBatch.cpp
+    src/renderer/Mesh.cpp
+    src/lod/MeshSimplifier.cpp
+    src/lod/LODGroup.cpp
+    src/lod/LODManager.cpp
+    src/renderer/TextureManager.cpp
+    src/renderer/vulkan/VulkanBuffer.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
+    src/renderer/vulkan/VulkanTexture.cpp
+    src/renderer/vulkan/VulkanTextureArray.cpp
+    src/renderer/vulkan/SamplerManager.cpp
+    src/terrain/HeightmapData.cpp
+    src/terrain/TerrainChunk.cpp
+    src/terrain/TerrainMaterial.cpp
+    src/terrain/Terrain.cpp
+    src/terrain/TerrainPatchMesh.cpp
+    src/terrain/TerrainQuadtree.cpp
+    src/terrain/TerrainLODManager.cpp
+    src/foliage/FoliageSystem.cpp
+    src/foliage/FoliageBatch.cpp
+    src/streaming/StreamingRegion.cpp
+    src/streaming/StreamingUploadQueue.cpp
+    src/streaming/WorldStreamingManager.cpp
+    src/partition/WorldPartitionCell.cpp
+    src/partition/WorldPartition.cpp
+    src/partition/WorldPartitionManager.cpp
+    src/worldgen/WorldNoise.cpp
+    src/worldgen/BiomeGenerator.cpp
+    src/worldgen/TerrainGenerationPipeline.cpp
+    src/worldgen/WorldRegionGenerator.cpp
+    src/worldgen/WorldGenerator.cpp
+)
+
+target_include_directories(test_world_generation
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${stb_SOURCE_DIR}
+)
+
+target_compile_definitions(test_world_generation
+    PRIVATE
+        GLFW_INCLUDE_VULKAN
+        GLM_FORCE_RADIANS
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
+
+if(MSVC)
+    target_compile_options(test_world_generation PRIVATE /W4 /permissive- /Zc:__cplusplus /EHsc)
+    target_compile_definitions(test_world_generation PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(test_world_generation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(test_world_generation
     PRIVATE
         Vulkan::Vulkan
         glfw

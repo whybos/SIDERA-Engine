@@ -18,7 +18,7 @@ struct ApplicationConfig {
     WindowConfig window{
         .width = 1920,
         .height = 1080,
-        .title = "SIDERA Engine v0.23.0 - Advanced Terrain LOD",
+        .title = "SIDERA Engine v0.24.0 - Procedural World Generation",
         .resizable = true
     };
     glm::vec4 clearColor{0.04f, 0.08f, 0.16f, 1.0f};
@@ -35,6 +35,9 @@ struct ApplicationConfig {
     bool terrainLodDebug = false;  // --terrain-lod-debug: enable Terrain Quadtree LOD debug visualization
     TerrainLODStrategy terrainLodStrategy = TerrainLODStrategy::ScreenSpaceError; // --terrain-lod-strategy screen|distance
     TerrainQualityPreset terrainQuality = TerrainQualityPreset::High;             // --terrain-quality low|medium|high|ultra
+    uint64_t worldSeed = 424242ULL;                                               // --world-seed <N>
+    WorldPreset worldPreset = WorldPreset::Balanced;                              // --world-preset balanced|continental|mountainous|archipelago|desert|alpine
+    float worldScale = 1.0f;                                                      // --world-scale <val>
     std::string heightmapPath = ""; // --heightmap <path>
     bool lodEnabled = true;        // --lod / --no-lod
     LODSelectionMode lodMode = LODSelectionMode::Distance; // --lod-mode distance|screenspace

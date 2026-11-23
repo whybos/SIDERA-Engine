@@ -33,7 +33,8 @@ Terrain::~Terrain() {
 bool Terrain::init(const TerrainConfig& config,
                    const VulkanDevice& device,
                    VkCommandPool transferCommandPool,
-                   TextureManager& textureManager) {
+                   TextureManager& textureManager,
+                   const HeightmapData* externalHeightmap) {
     const auto startTime = std::chrono::high_resolution_clock::now();
 
     m_device = &device;
@@ -44,8 +45,12 @@ bool Terrain::init(const TerrainConfig& config,
     SIDERA_LOG_INFO("Terrain", "Initializing Terrain System ({}x{}m, chunks: {}x{}, chunkRes: {} quads)...",
                     m_config.width, m_config.length, m_config.chunksX, m_config.chunksZ, m_config.chunkResolution);
 
-    // 1. Load or procedurally generate heightmap
-    if (!m_config.heightmapPath.empty() && m_heightmap.loadFromFile(m_config.heightmapPath)) {
+    // 1. Use external procedural world heightmap, load from disk, or generate fallback
+    if (externalHeightmap && externalHeightmap->isValid()) {
+        m_heightmap = *externalHeightmap;
+        SIDERA_LOG_INFO("Terrain", "Using external WorldGenerator heightmap ({}x{}).",
+                        m_heightmap.getWidth(), m_heightmap.getHeight());
+    } else if (!m_config.heightmapPath.empty() && m_heightmap.loadFromFile(m_config.heightmapPath)) {
         SIDERA_LOG_INFO("Terrain", "Loaded heightmap from '{}'.", m_config.heightmapPath);
     } else {
         SIDERA_LOG_INFO("Terrain", "Generating procedural multi-octave heightmap (seed {})...", m_config.proceduralSeed);
